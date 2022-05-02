@@ -1,0 +1,5 @@
+- claimable period by default is block.timestamp / WEEK * WEEK
+- update period before add amount to reward per gauge
+- add events
+- make public
+- add blacklist
