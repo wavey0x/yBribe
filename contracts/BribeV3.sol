@@ -21,6 +21,7 @@ interface GaugeController {
     function last_user_vote(address, address) external view returns (uint);
     function points_weight(address, uint256) external view returns (Point memory);
     function checkpoint_gauge(address) external;
+    function time_total() external view returns (uint);
 }
 
 interface ve {
@@ -44,6 +45,7 @@ contract BribeV3 {
     event SetRewardDelegate(address user, address delegate);
     event ClearRewardDelegate(address user, address delegate);
     event ChangeOwner(address owner);
+    event Slopes(uint slope, uint blacklisted_slope);
 
     uint constant WEEK = 86400 * 7;
     uint constant PRECISION = 10**18;
@@ -88,6 +90,7 @@ contract BribeV3 {
             _period = block.timestamp / WEEK * WEEK;
             GAUGE.checkpoint_gauge(gauge);
             uint _slope = GAUGE.points_weight(gauge, _period).slope;
+            emit Slopes(_slope, get_blacklisted_slope(gauge));
             _slope -= get_blacklisted_slope(gauge);
             uint _amount = _reward_per_gauge[gauge][reward_token] - _claims_per_gauge[gauge][reward_token];
             reward_per_token[gauge][reward_token] = _amount * PRECISION / _slope;
@@ -113,14 +116,32 @@ contract BribeV3 {
         if(is_blacklisted(user)){
             return 0;
         }
+        if (active_period[gauge][reward_token] == 0){
+            return 0;
+        }
         uint _period = block.timestamp / WEEK * WEEK;
+        if (last_user_claim[user][gauge][reward_token] >= _period) {
+            return 0;
+        }
+        uint _last_vote = GAUGE.last_user_vote(user, gauge);
+        if (_last_vote >= _period) {
+            return 0;
+        }
+        
         uint _amount = 0;
-        if (last_user_claim[user][gauge][reward_token] < _period) {
-            uint _last_vote = GAUGE.last_user_vote(user, gauge);
-            if (_last_vote < _period) {
-                uint _slope = GAUGE.vote_user_slopes(user, gauge).slope;
-                _amount = _slope * reward_per_token[gauge][reward_token] / PRECISION;
-            }
+        // If active period hasn't been updated simulate some work to do it.
+        if (_period != active_period[gauge][reward_token]){
+            require(_period == GAUGE.time_total(), "!Checkpoint required"); // Checkpoint is always required to get accuracy
+            uint _slope = GAUGE.points_weight(gauge, _period).slope;
+            _slope -= get_blacklisted_slope(gauge);
+            uint rewards_available = _reward_per_gauge[gauge][reward_token] - _claims_per_gauge[gauge][reward_token];
+            uint _reward_per_token = rewards_available * PRECISION / _slope;
+            uint _user_slope = GAUGE.vote_user_slopes(user, gauge).slope;
+            _amount = _user_slope * _reward_per_token / PRECISION;
+        }
+        else{
+            uint _slope = GAUGE.vote_user_slopes(user, gauge).slope;
+            _amount = _slope * reward_per_token[gauge][reward_token] / PRECISION;
         }
         return _amount;
     }
@@ -188,35 +209,35 @@ contract BribeV3 {
         require(success && (data.length == 0 || abi.decode(data, (bool))));
     }
 
-    function get_blacklisted_slope(address _gauge) public view returns (uint) {
+    function get_blacklisted_slope(address gauge) public view returns (uint) {
         uint slope;
         uint length = blacklist.length;
         for (uint i = 0; i < length; i++) {
-            slope += GAUGE.vote_user_slopes(blacklist[i], _gauge).slope;
+            slope += GAUGE.vote_user_slopes(blacklist[i], gauge).slope;
         }
         return slope;
     }
 
-    function add_to_blacklist(address _user) external {
+    function add_to_blacklist(address user) external {
         require(msg.sender == owner, "!owner");
 
         uint length = blacklist.length;
 
         for (uint i = 0; i < length; i++) {
-            require(blacklist[i] != _user, "!already");
+            require(blacklist[i] != user, "!already");
         }
-        blacklist.push(_user);
-        emit Blacklisted(_user);
+        blacklist.push(user);
+        emit Blacklisted(user);
     }
 
-    function remove_from_blacklist(address _user) external {
+    function remove_from_blacklist(address user) external {
         require(msg.sender == owner, "!owner");
         uint length = blacklist.length;
         for (uint i = 0; i < length; i++) {
-            if (blacklist[i] == _user) {
+            if (blacklist[i] == user) {
                 blacklist[i] = blacklist[length-1];
                 blacklist.pop();
-                emit RemovedFromBlacklist(_user);
+                emit RemovedFromBlacklist(user);
                 return;
             }
         }
@@ -232,20 +253,20 @@ contract BribeV3 {
         return false;
     }
 
-    function set_delegate(address _delegate) external {
-        require (_delegate != msg.sender, "Can't delegate to self");
-        require (_delegate != address(0), "Can't delegate to 0x0");
+    function set_delegate(address delegate) external {
+        require (delegate != msg.sender, "Can't delegate to self");
+        require (delegate != address(0), "Can't delegate to 0x0");
         address current_delegate = reward_delegate[msg.sender];
-        require (_delegate != current_delegate, "Already delegated to this address");
+        require (delegate != current_delegate, "Already delegated to this address");
         
         // Update delegation mapping
-        reward_delegate[msg.sender] = _delegate;
+        reward_delegate[msg.sender] = delegate;
         
         if (current_delegate != address(0)) {
             emit ClearRewardDelegate(msg.sender, current_delegate);
         }
 
-        emit SetRewardDelegate(msg.sender, _delegate);
+        emit SetRewardDelegate(msg.sender, delegate);
     }
 
     function clear_delegate() external {
@@ -258,9 +279,9 @@ contract BribeV3 {
         emit ClearRewardDelegate(msg.sender, current_delegate);
     }
 
-    function set_owner(address _owner) external {
+    function set_owner(address new_owner) external {
         require(msg.sender == owner, "!owner");
-        pending_owner = _owner;
+        pending_owner = new_owner;
     }
 
     function accept_owner() external {
