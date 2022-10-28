@@ -1,5 +1,7 @@
 pragma solidity 0.8.6;
 
+import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+
 interface GaugeController {
     struct VotedSlope {
         uint slope;
@@ -32,6 +34,7 @@ interface erc20 {
 }
 
 contract BribeV3 {
+    using EnumerableSet for EnumerableSet.AddressSet;
 
     event RewardAdded(address indexed briber, address indexed gauge, address indexed reward_token, uint amount);
     event RewardClaimed(address indexed user, address indexed gauge, address indexed reward_token, uint amount);
@@ -40,10 +43,11 @@ contract BribeV3 {
     event SetRewardDelegate(address user, address delegate);
     event ClearRewardDelegate(address user, address delegate);
     event ChangeOwner(address owner);
-    event Slopes(uint slope, uint blacklisted_slope);
+    event PeriodUpdated(uint period, uint bias, uint blacklisted_bias);
 
     uint constant WEEK = 86400 * 7;
     uint constant PRECISION = 10**18;
+    uint constant MAX_TIME = 4 * 365 days;
     GaugeController constant GAUGE = GaugeController(0x2F50D538606Fa9EDD2B11E2446BEb18C9D5846bB);
     ve constant VE = ve(0x5f3b5DfEb7B28CDbD7FAba78963EE202a494e2A2);
     
@@ -60,8 +64,8 @@ contract BribeV3 {
 
     address public owner = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52;
     address public pending_owner;
-    address[] public blacklist;
     mapping(address => address) public reward_delegate;
+    EnumerableSet.AddressSet private blacklist;
     
     function _add(address gauge, address reward) internal {
         if (!_rewards_in_gauge[gauge][reward]) {
@@ -84,11 +88,12 @@ contract BribeV3 {
         if (block.timestamp >= _period + WEEK) {
             _period = block.timestamp / WEEK * WEEK;
             GAUGE.checkpoint_gauge(gauge);
-            uint _slope = GAUGE.points_weight(gauge, _period).slope;
-            emit Slopes(_slope, get_blacklisted_slope(gauge));
-            _slope -= get_blacklisted_slope(gauge);
+            uint _bias = GAUGE.points_weight(gauge, _period).bias;
+            uint black_listed_bias = get_blacklisted_bias(gauge);
+            emit PeriodUpdated(_period, _bias, black_listed_bias);
+            _bias -= black_listed_bias;
             uint _amount = _reward_per_gauge[gauge][reward_token] - _claims_per_gauge[gauge][reward_token];
-            reward_per_token[gauge][reward_token] = _amount * PRECISION / _slope;
+            reward_per_token[gauge][reward_token] = _amount * PRECISION / _bias;
             active_period[gauge][reward_token] = _period;
         }
         return _period;
@@ -108,7 +113,7 @@ contract BribeV3 {
     }
     
     function claimable(address user, address gauge, address reward_token) external view returns (uint) {
-        if(is_blacklisted(user)){
+        if(blacklist.contains(user)){
             return 0;
         }
         if (active_period[gauge][reward_token] == 0){
@@ -127,20 +132,27 @@ contract BribeV3 {
         // If active period hasn't been updated simulate some work to do it.
         if (_period != active_period[gauge][reward_token]){
             require(_period == GAUGE.time_total(), "!Checkpoint required"); // Checkpoint is always required to get accuracy
-            uint _slope = GAUGE.points_weight(gauge, _period).slope;
-            _slope -= get_blacklisted_slope(gauge);
+            uint _bias = GAUGE.points_weight(gauge, _period).bias;
+            _bias -= get_blacklisted_bias(gauge);
             uint rewards_available = _reward_per_gauge[gauge][reward_token] - _claims_per_gauge[gauge][reward_token];
-            uint _reward_per_token = rewards_available * PRECISION / _slope;
-            uint _user_slope = GAUGE.vote_user_slopes(user, gauge).slope;
-            _amount = _user_slope * _reward_per_token / PRECISION;
+            uint _reward_per_token = rewards_available * PRECISION / _bias;
+            GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
+            uint _user_bias = _calc_bias(vs.slope, vs.end);
+            _amount = _user_bias * _reward_per_token / PRECISION;
         }
         else{
-            uint _slope = GAUGE.vote_user_slopes(user, gauge).slope;
-            _amount = _slope * reward_per_token[gauge][reward_token] / PRECISION;
+            GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
+            uint _user_bias = _calc_bias(vs.slope, vs.end);
+            _amount = _user_bias * reward_per_token[gauge][reward_token] / PRECISION;
         }
         return _amount;
     }
-    
+
+    function _calc_bias(uint slope, uint end) internal view returns (uint) {
+        if (next_period() >= end) return 0;
+        return slope * (end - block.timestamp);
+    }
+
     
     function claim_reward(address gauge, address reward_token) external returns (uint) {
         return _claim_reward(msg.sender, gauge, reward_token);
@@ -160,7 +172,7 @@ contract BribeV3 {
     }
     
     function _claim_reward(address user, address gauge, address reward_token) internal returns (uint) {
-        if(is_blacklisted(user)){
+        if(blacklist.contains(user)){
             return 0;
         }
         uint _period = _update_period(gauge, reward_token);
@@ -169,8 +181,9 @@ contract BribeV3 {
             last_user_claim[user][gauge][reward_token] = _period;
             uint _last_vote = GAUGE.last_user_vote(user, gauge);
             if (_last_vote < _period) {
-                uint _slope = GAUGE.vote_user_slopes(user, gauge).slope;
-                _amount = _slope * reward_per_token[gauge][reward_token] / PRECISION;
+                GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
+                uint _user_bias = _calc_bias(vs.slope, vs.end);
+                _amount = _user_bias * reward_per_token[gauge][reward_token] / PRECISION;
                 if (_amount > 0) {
                     _claims_per_gauge[gauge][reward_token] += _amount;
                     address delegate = reward_delegate[user];
@@ -204,48 +217,32 @@ contract BribeV3 {
         require(success && (data.length == 0 || abi.decode(data, (bool))));
     }
 
-    function get_blacklisted_slope(address gauge) public view returns (uint) {
-        uint slope;
-        uint length = blacklist.length;
+    function get_blacklisted_bias(address gauge) public view returns (uint) {
+        uint bias;
+        uint length = blacklist.length();
         for (uint i = 0; i < length; i++) {
-            slope += GAUGE.vote_user_slopes(blacklist[i], gauge).slope;
+            GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(blacklist.at(i), gauge);
+            bias = _calc_bias(vs.slope, vs.end);
         }
-        return slope;
+        return bias;
     }
 
-    function add_to_blacklist(address user) external {
-        require(msg.sender == owner, "!owner");
-
-        uint length = blacklist.length;
-
-        for (uint i = 0; i < length; i++) {
-            require(blacklist[i] != user, "!already");
-        }
-        blacklist.push(user);
-        emit Blacklisted(user);
+    function next_period() public view returns (uint) {
+        return block.timestamp / WEEK * WEEK + WEEK;
     }
 
-    function remove_from_blacklist(address user) external {
+    function add_to_blacklist(address _user) external {
         require(msg.sender == owner, "!owner");
-        uint length = blacklist.length;
-        for (uint i = 0; i < length; i++) {
-            if (blacklist[i] == user) {
-                blacklist[i] = blacklist[length-1];
-                blacklist.pop();
-                emit RemovedFromBlacklist(user);
-                return;
-            }
-        }
+        if(blacklist.add(_user)) emit Blacklisted(_user);
+    }
+
+    function remove_from_blacklist(address _user) external {
+        require(msg.sender == owner, "!owner");
+        if(blacklist.remove(_user)) emit RemovedFromBlacklist(_user);
     }
 
     function is_blacklisted(address address_to_check) public view returns (bool) {
-        uint list_length = blacklist.length;
-        for (uint i = 0; i < list_length; i++) {
-            if (blacklist[i] == address_to_check) {
-                return true;
-            }
-        }
-        return false;
+        return blacklist.contains(address_to_check);
     }
 
     function set_delegate(address delegate) external {
