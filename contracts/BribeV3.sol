@@ -40,10 +40,11 @@ contract BribeV3 {
     event SetRewardDelegate(address user, address delegate);
     event ClearRewardDelegate(address user, address delegate);
     event ChangeOwner(address owner);
-    event Slopes(uint slope, uint blacklisted_slope);
+    event PeriodUpdated(uint period, uint bias, uint blacklisted_bias);
 
     uint constant WEEK = 86400 * 7;
     uint constant PRECISION = 10**18;
+    uint constant MAX_TIME = 4 * 365 days;
     GaugeController constant GAUGE = GaugeController(0x2F50D538606Fa9EDD2B11E2446BEb18C9D5846bB);
     ve constant VE = ve(0x5f3b5DfEb7B28CDbD7FAba78963EE202a494e2A2);
     
@@ -84,11 +85,12 @@ contract BribeV3 {
         if (block.timestamp >= _period + WEEK) {
             _period = block.timestamp / WEEK * WEEK;
             GAUGE.checkpoint_gauge(gauge);
-            uint _slope = GAUGE.points_weight(gauge, _period).slope;
-            emit Slopes(_slope, get_blacklisted_slope(gauge));
-            _slope -= get_blacklisted_slope(gauge);
+            uint _bias = GAUGE.points_weight(gauge, _period).bias;
+            uint black_listed_bias = get_blacklisted_bias(gauge);
+            emit PeriodUpdated(_period, _bias, black_listed_bias);
+            _bias -= black_listed_bias;
             uint _amount = _reward_per_gauge[gauge][reward_token] - _claims_per_gauge[gauge][reward_token];
-            reward_per_token[gauge][reward_token] = _amount * PRECISION / _slope;
+            reward_per_token[gauge][reward_token] = _amount * PRECISION / _bias;
             active_period[gauge][reward_token] = _period;
         }
         return _period;
@@ -127,20 +129,29 @@ contract BribeV3 {
         // If active period hasn't been updated simulate some work to do it.
         if (_period != active_period[gauge][reward_token]){
             require(_period == GAUGE.time_total(), "!Checkpoint required"); // Checkpoint is always required to get accuracy
-            uint _slope = GAUGE.points_weight(gauge, _period).slope;
-            _slope -= get_blacklisted_slope(gauge);
+            uint _bias = GAUGE.points_weight(gauge, _period).bias;
+            _bias -= get_blacklisted_bias(gauge);
             uint rewards_available = _reward_per_gauge[gauge][reward_token] - _claims_per_gauge[gauge][reward_token];
-            uint _reward_per_token = rewards_available * PRECISION / _slope;
-            uint _user_slope = GAUGE.vote_user_slopes(user, gauge).slope;
-            _amount = _user_slope * _reward_per_token / PRECISION;
+            uint _reward_per_token = rewards_available * PRECISION / _bias;
+            uint _slope = GAUGE.vote_user_slopes(user, gauge).slope;
+            uint _end = GAUGE.vote_user_slopes(user, gauge).end;
+            uint _user_bias = _calc_bias(_slope, _end);
+            _amount = _user_bias * _reward_per_token / PRECISION;
         }
         else{
             uint _slope = GAUGE.vote_user_slopes(user, gauge).slope;
-            _amount = _slope * reward_per_token[gauge][reward_token] / PRECISION;
+            uint _end = GAUGE.vote_user_slopes(user, gauge).end;
+            uint _user_bias = _calc_bias(_slope, _end);
+            _amount = _user_bias * reward_per_token[gauge][reward_token] / PRECISION;
         }
         return _amount;
     }
-    
+
+    function _calc_bias(uint slope, uint end) internal view returns (uint) {
+        if (next_period() >= end) return 0;
+        return slope * (end - block.timestamp);
+    }
+
     
     function claim_reward(address gauge, address reward_token) external returns (uint) {
         return _claim_reward(msg.sender, gauge, reward_token);
@@ -170,7 +181,9 @@ contract BribeV3 {
             uint _last_vote = GAUGE.last_user_vote(user, gauge);
             if (_last_vote < _period) {
                 uint _slope = GAUGE.vote_user_slopes(user, gauge).slope;
-                _amount = _slope * reward_per_token[gauge][reward_token] / PRECISION;
+                uint _end = GAUGE.vote_user_slopes(user, gauge).end;
+                uint _bias = _calc_bias(_slope, _end);
+                _amount = _bias * reward_per_token[gauge][reward_token] / PRECISION;
                 if (_amount > 0) {
                     _claims_per_gauge[gauge][reward_token] += _amount;
                     address delegate = reward_delegate[user];
@@ -204,13 +217,19 @@ contract BribeV3 {
         require(success && (data.length == 0 || abi.decode(data, (bool))));
     }
 
-    function get_blacklisted_slope(address gauge) public view returns (uint) {
-        uint slope;
+    function get_blacklisted_bias(address gauge) public view returns (uint) {
+        uint bias;
         uint length = blacklist.length;
         for (uint i = 0; i < length; i++) {
-            slope += GAUGE.vote_user_slopes(blacklist[i], gauge).slope;
+            uint _slope = GAUGE.vote_user_slopes(blacklist[i], gauge).slope;
+            uint _end = GAUGE.vote_user_slopes(blacklist[i], gauge).end;
+            bias += _calc_bias(_slope, _end);
         }
-        return slope;
+        return bias;
+    }
+
+    function next_period() public view returns (uint) {
+        return block.timestamp / WEEK * WEEK + WEEK;
     }
 
     function add_to_blacklist(address user) external {
