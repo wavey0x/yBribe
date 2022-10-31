@@ -49,6 +49,7 @@ contract BribeV3 {
 
     uint constant WEEK = 86400 * 7;
     uint constant PRECISION = 10**18;
+    uint constant BPS = 10_000;
     uint constant MAX_TIME = 4 * 365 days;
     GaugeController constant GAUGE = GaugeController(0x2F50D538606Fa9EDD2B11E2446BEb18C9D5846bB);
     ve constant VE = ve(0x5f3b5DfEb7B28CDbD7FAba78963EE202a494e2A2);
@@ -58,16 +59,17 @@ contract BribeV3 {
     
     mapping(address => mapping(address => uint)) public reward_per_token;
     mapping(address => mapping(address => uint)) public active_period;
-    mapping(address => mapping(address => uint)) public next_claim_time;
     mapping(address => mapping(address => mapping(address => uint))) public last_user_claim;
+    mapping(address => uint) public next_claim_time;
     
     mapping(address => address[]) public _rewards_per_gauge;
     mapping(address => address[]) public _gauges_per_reward;
     mapping(address => mapping(address => bool)) public _rewards_in_gauge;
 
     address public owner = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52;
+    address public fee_recipient = 0x93A62dA5a14C80f265DAbC077fCEE437B1a0Efde;
     address public pending_owner;
-    uint fee_percent = 100;
+    uint fee_percent = 100; // Expressed in BPS
     mapping(address => address) public reward_delegate;
     EnumerableSet.AddressSet private blacklist;
     
@@ -106,10 +108,15 @@ contract BribeV3 {
     
     function add_reward_amount(address gauge, address reward_token, uint amount) external returns (bool) {
         _safeTransferFrom(reward_token, msg.sender, address(this), amount);
+        uint fee_take = fee_percent * amount / BPS;
+        uint reward_amount = amount - fee_take;
+        if (fee_take > 0){
+            _safeTransfer(reward_token, fee_recipient, fee_take);
+        }
         _update_period(gauge, reward_token);
-        _reward_per_gauge[gauge][reward_token] += amount;
+        _reward_per_gauge[gauge][reward_token] += reward_amount;
         _add(gauge, reward_token);
-        emit RewardAdded(msg.sender, gauge, reward_token, amount);
+        emit RewardAdded(msg.sender, gauge, reward_token, reward_amount);
         return true;
     }
     
@@ -177,8 +184,7 @@ contract BribeV3 {
     }
     
     function _claim_reward(address user, address gauge, address reward_token) internal returns (uint) {
-        uint _period = current_period();
-        if(blacklist.contains(user) || next_claim_time[user] > _period){
+        if(blacklist.contains(user) || next_claim_time[user] > current_period()){
             return 0;
         }
         uint _period = _update_period(gauge, reward_token);
@@ -245,7 +251,7 @@ contract BribeV3 {
     function remove_from_blacklist(address _user) external {
         require(msg.sender == owner, "!owner");
         if(blacklist.remove(_user)){
-            next_claim_time[_user] = next_claim_time;
+            next_claim_time[_user] = current_period() + WEEK;
             emit RemovedFromBlacklist(_user);
         }
     }
@@ -280,9 +286,20 @@ contract BribeV3 {
         emit ClearRewardDelegate(msg.sender, current_delegate);
     }
 
-    function set_owner(address new_owner) external {
+    function set_fee_percent(uint _percent) external {
         require(msg.sender == owner, "!owner");
-        pending_owner = new_owner;
+        require(_percent <= 4_000);
+        fee_percent = _percent;
+    }
+
+    function set_fee_recipient(address _recipient) external {
+        require(msg.sender == owner, "!owner");
+        fee_recipient = _recipient;
+    }
+
+    function set_owner(address _new_owner) external {
+        require(msg.sender == owner, "!owner");
+        pending_owner = _new_owner;
     }
 
     function accept_owner() external {
