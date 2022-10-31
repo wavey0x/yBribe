@@ -37,13 +37,15 @@ contract BribeV3 {
     using EnumerableSet for EnumerableSet.AddressSet;
 
     event RewardAdded(address indexed briber, address indexed gauge, address indexed reward_token, uint amount);
+    event NewTokenReward(address indexed gauge, address indexed reward_token); // Specifies unique token added for first time to gauge
     event RewardClaimed(address indexed user, address indexed gauge, address indexed reward_token, uint amount);
-    event Blacklisted(address user);
-    event RemovedFromBlacklist(address user);
-    event SetRewardDelegate(address user, address delegate);
-    event ClearRewardDelegate(address user, address delegate);
+    event Blacklisted(address indexed user);
+    event RemovedFromBlacklist(address indexed user);
+    event SetRewardDelegate(address indexed user, address delegate);
+    event ClearRewardDelegate(address indexed user, address delegate);
     event ChangeOwner(address owner);
     event PeriodUpdated(uint period, uint bias, uint blacklisted_bias);
+    event FeeUpdated(uint fee);
 
     uint constant WEEK = 86400 * 7;
     uint constant PRECISION = 10**18;
@@ -65,6 +67,7 @@ contract BribeV3 {
 
     address public owner = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52;
     address public pending_owner;
+    uint fee_percent = 100;
     mapping(address => address) public reward_delegate;
     EnumerableSet.AddressSet private blacklist;
     
@@ -73,6 +76,7 @@ contract BribeV3 {
             _rewards_per_gauge[gauge].push(reward);
             _gauges_per_reward[reward].push(gauge);
             _rewards_in_gauge[gauge][reward] = true;
+            emit NewTokenReward(gauge, reward);
         }
     }
     
