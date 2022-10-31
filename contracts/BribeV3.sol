@@ -36,7 +36,7 @@ interface erc20 {
 contract BribeV3 {
     using EnumerableSet for EnumerableSet.AddressSet;
 
-    event RewardAdded(address indexed briber, address indexed gauge, address indexed reward_token, uint amount);
+    event RewardAdded(address indexed briber, address indexed gauge, address indexed reward_token, uint amount, uint fee);
     event NewTokenReward(address indexed gauge, address indexed reward_token); // Specifies unique token added for first time to gauge
     event RewardClaimed(address indexed user, address indexed gauge, address indexed reward_token, uint amount);
     event Blacklisted(address indexed user);
@@ -116,7 +116,7 @@ contract BribeV3 {
         _update_period(gauge, reward_token);
         _reward_per_gauge[gauge][reward_token] += reward_amount;
         _add(gauge, reward_token);
-        emit RewardAdded(msg.sender, gauge, reward_token, reward_amount);
+        emit RewardAdded(msg.sender, gauge, reward_token, reward_amount, fee_take);
         return true;
     }
     
@@ -135,8 +135,8 @@ contract BribeV3 {
         if (last_user_claim[user][gauge][reward_token] >= _period) {
             return 0;
         }
-        uint _last_vote = GAUGE.last_user_vote(user, gauge);
-        if (_last_vote >= _period) {
+        uint last_user_vote = GAUGE.last_user_vote(user, gauge);
+        if (last_user_vote >= _period) {
             return 0;
         }
         
@@ -149,20 +149,20 @@ contract BribeV3 {
             uint rewards_available = _reward_per_gauge[gauge][reward_token] - _claims_per_gauge[gauge][reward_token];
             uint _reward_per_token = rewards_available * PRECISION / _bias;
             GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
-            uint _user_bias = _calc_bias(vs.slope, vs.end);
+            uint _user_bias = _calc_bias(vs.slope, vs.end, last_user_vote);
             _amount = _user_bias * _reward_per_token / PRECISION;
         }
         else{
             GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
-            uint _user_bias = _calc_bias(vs.slope, vs.end);
+            uint _user_bias = _calc_bias(vs.slope, vs.end, last_user_vote);
             _amount = _user_bias * reward_per_token[gauge][reward_token] / PRECISION;
         }
         return _amount;
     }
 
-    function _calc_bias(uint slope, uint end) internal view returns (uint) {
-        if (current_period() + WEEK >= end) return 0;
-        return slope * (end - block.timestamp);
+    function _calc_bias(uint _slope, uint _end, uint _last_user_vote) internal view returns (uint) {
+        if (current_period() + WEEK >= _end) return 0;
+        return _slope * (_end - _last_user_vote);
     }
 
     
@@ -191,10 +191,10 @@ contract BribeV3 {
         uint _amount = 0;
         if (last_user_claim[user][gauge][reward_token] < _period) {
             last_user_claim[user][gauge][reward_token] = _period;
-            uint _last_vote = GAUGE.last_user_vote(user, gauge);
-            if (_last_vote < _period) {
+            uint last_vote = GAUGE.last_user_vote(user, gauge);
+            if (last_vote < _period) {
                 GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
-                uint _user_bias = _calc_bias(vs.slope, vs.end);
+                uint _user_bias = _calc_bias(vs.slope, vs.end, last_vote);
                 _amount = _user_bias * reward_per_token[gauge][reward_token] / PRECISION;
                 if (_amount > 0) {
                     _claims_per_gauge[gauge][reward_token] += _amount;
@@ -233,8 +233,10 @@ contract BribeV3 {
         uint bias;
         uint length = blacklist.length();
         for (uint i = 0; i < length; i++) {
-            GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(blacklist.at(i), gauge);
-            bias = _calc_bias(vs.slope, vs.end);
+            address user = blacklist.at(i);
+            uint last_user_vote = GAUGE.last_user_vote(user, gauge);
+            GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
+            bias = _calc_bias(vs.slope, vs.end, last_user_vote);
         }
         return bias;
     }
