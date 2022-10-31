@@ -56,6 +56,7 @@ contract BribeV3 {
     
     mapping(address => mapping(address => uint)) public reward_per_token;
     mapping(address => mapping(address => uint)) public active_period;
+    mapping(address => mapping(address => uint)) public next_claim_time;
     mapping(address => mapping(address => mapping(address => uint))) public last_user_claim;
     
     mapping(address => address[]) public _rewards_per_gauge;
@@ -86,7 +87,7 @@ contract BribeV3 {
     function _update_period(address gauge, address reward_token) internal returns (uint) {
         uint _period = active_period[gauge][reward_token];
         if (block.timestamp >= _period + WEEK) {
-            _period = block.timestamp / WEEK * WEEK;
+            _period = current_period();
             GAUGE.checkpoint_gauge(gauge);
             uint _bias = GAUGE.points_weight(gauge, _period).bias;
             uint black_listed_bias = get_blacklisted_bias(gauge);
@@ -113,13 +114,13 @@ contract BribeV3 {
     }
     
     function claimable(address user, address gauge, address reward_token) external view returns (uint) {
-        if(blacklist.contains(user)){
+        uint _period = current_period();
+        if(blacklist.contains(user) || next_claim_time[user] > _period){
             return 0;
         }
         if (active_period[gauge][reward_token] == 0){
             return 0;
         }
-        uint _period = block.timestamp / WEEK * WEEK;
         if (last_user_claim[user][gauge][reward_token] >= _period) {
             return 0;
         }
@@ -149,7 +150,7 @@ contract BribeV3 {
     }
 
     function _calc_bias(uint slope, uint end) internal view returns (uint) {
-        if (next_period() >= end) return 0;
+        if (current_period() + WEEK >= end) return 0;
         return slope * (end - block.timestamp);
     }
 
@@ -172,7 +173,8 @@ contract BribeV3 {
     }
     
     function _claim_reward(address user, address gauge, address reward_token) internal returns (uint) {
-        if(blacklist.contains(user)){
+        uint _period = current_period();
+        if(blacklist.contains(user) || next_claim_time[user] > _period){
             return 0;
         }
         uint _period = _update_period(gauge, reward_token);
@@ -227,8 +229,8 @@ contract BribeV3 {
         return bias;
     }
 
-    function next_period() public view returns (uint) {
-        return block.timestamp / WEEK * WEEK + WEEK;
+    function current_period() public view returns (uint) {
+        return block.timestamp / WEEK * WEEK;
     }
 
     function add_to_blacklist(address _user) external {
@@ -238,7 +240,10 @@ contract BribeV3 {
 
     function remove_from_blacklist(address _user) external {
         require(msg.sender == owner, "!owner");
-        if(blacklist.remove(_user)) emit RemovedFromBlacklist(_user);
+        if(blacklist.remove(_user)){
+            next_claim_time[_user] = next_claim_time;
+            emit RemovedFromBlacklist(_user);
+        }
     }
 
     function is_blacklisted(address address_to_check) public view returns (bool) {
