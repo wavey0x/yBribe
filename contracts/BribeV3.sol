@@ -19,6 +19,7 @@ interface GaugeController {
     function points_weight(address, uint) external view returns (Point memory);
     function checkpoint_gauge(address) external;
     function time_total() external view returns (uint);
+    function gauge_types(address) external view returns (int128);
 }
 
 interface erc20 { 
@@ -105,6 +106,7 @@ contract BribeV3 {
     }
     
     function add_reward_amount(address gauge, address reward_token, uint amount) external returns (bool) {
+        require(GAUGE.gauge_types(gauge) >= 0); // @dev: reverts on invalid gauge
         _safeTransferFrom(reward_token, msg.sender, address(this), amount);
         uint fee_take = fee_percent * amount / BPS;
         uint reward_amount = amount - fee_take;

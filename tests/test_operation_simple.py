@@ -1,5 +1,5 @@
 import brownie
-from brownie import Contract, accounts, chain
+from brownie import Contract, accounts, chain, ZERO_ADDRESS
 import pytest
 from utils import to_address
 
@@ -126,6 +126,8 @@ def change_owner(
     assert bribe.owner() == user
     bribe.accept_owner({'from': voter1})
     assert bribe.owner() == voter1
+    with brownie.reverts():
+        bribe.set_owner(user, {'from': gov})
 
 def test_checkpoint_gauge(
     token1, token2, token1_whale, bribe, gov, accounts, WEEK, user,
@@ -161,6 +163,16 @@ def test(gauge1):
     c_slope = gauge_controller.vote_user_slopes(convex_voter, gauge).dict()["slope"] / decimals
 
     print(f'Total: {total_slope}\nConvex: {c_slope}\nYearn: {y_slope}')
+
+def test_valid_gauge(token1, token2, token1_whale, bribe, user,
+    token2_whale, gauge1, gauge2, gauge_controller, voter1, voter2
+):
+    token1.approve(bribe, 2**256-1, {'from': token1_whale})
+    token2.approve(bribe, 2**256-1, {'from': token2_whale})
+    bribe.add_reward_amount(gauge1, token1, 2_000e18, {'from': token1_whale})
+    bribe.add_reward_amount(gauge2, token2, 5_000e18, {'from': token2_whale})
+    with brownie.reverts():
+        bribe.add_reward_amount(ZERO_ADDRESS, token1, 2_000e18, {'from': token1_whale})
 
 def test_claimable(token1, token2, token1_whale, bribe, user,
     token2_whale, gauge1, gauge2, gauge_controller, voter1, voter2
