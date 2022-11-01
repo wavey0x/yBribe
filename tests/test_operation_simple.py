@@ -200,3 +200,28 @@ def test_claimable(token1, token2, token1_whale, bribe, user,
     bribe.claim_reward(gauge2, token2, {'from':user})
     bribe.claimable(voter1, gauge1, token1)
     bribe.claimable(voter1, gauge2, token2)
+
+def test_rewards_per_gauge(token1, token2, token1_whale, bribe, user,
+    token2_whale, gauge1, gauge2, gauge_controller, voter1, voter2
+):
+
+    WEEK = 86400 * 7
+    period = int(chain.time() / WEEK) * WEEK
+
+    # Poke gauges
+    bribe.claim_reward(gauge1, token1, {'from':user})
+    bribe.claim_reward(gauge2, token2, {'from':user})
+
+    token1.approve(bribe, 2**256-1, {'from': token1_whale})
+    token2.approve(bribe, 2**256-1, {'from': token2_whale})
+
+    before1 = bribe.claimable(voter1, gauge1, token1)
+    before2 = bribe.claimable(voter1, gauge1, token1)
+    bribe.add_reward_amount(gauge1, token1, 2_000e18, {'from': token1_whale})
+    bribe.add_reward_amount(gauge2, token2, 5_000e18, {'from': token2_whale})
+    bribe.add_reward_amount(gauge1, token2, 2_000e18, {'from': token2_whale})
+    bribe.add_reward_amount(gauge2, token1, 5_000e18, {'from': token1_whale})
+    gauges = list(bribe.gauges_per_reward(token1))
+    tokens = list(bribe.rewards_per_gauge(gauge1))
+    assert len(gauges) == 2
+    assert len(tokens) == 2

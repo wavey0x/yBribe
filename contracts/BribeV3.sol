@@ -21,10 +21,6 @@ interface GaugeController {
     function time_total() external view returns (uint);
 }
 
-interface ve {
-    function get_last_user_slope(address) external view returns (int128);
-}
-
 interface erc20 { 
     function transfer(address recipient, uint256 amount) external returns (bool);
     function decimals() external view returns (uint8);
@@ -52,7 +48,6 @@ contract BribeV3 {
     uint constant BPS = 10_000;
     uint constant MAX_TIME = 4 * 365 days;
     GaugeController constant GAUGE = GaugeController(0x2F50D538606Fa9EDD2B11E2446BEb18C9D5846bB);
-    ve constant VE = ve(0x5f3b5DfEb7B28CDbD7FAba78963EE202a494e2A2);
     
     mapping(address => mapping(address => uint)) public claims_per_gauge;
     mapping(address => mapping(address => uint)) public reward_per_gauge;
