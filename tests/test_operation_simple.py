@@ -74,7 +74,7 @@ def test_claim_reward_for_many(
     tokens = [token1, token2]
     bribe.claim_reward_for_many(users, gauges, tokens, {'from':user})
 
-def test_delegate(
+def test_reward_recipient(
     token1, token2, token1_whale, bribe, gov, accounts, WEEK, user,
     token2_whale, gauge1, gauge2, gauge_controller, voter1, voter2
 ):
@@ -92,9 +92,9 @@ def test_delegate(
 
     userbal = token1.balanceOf(user)
     voterbal = token1.balanceOf(voter2)
-    bribe.set_delegate(user, {'from': voter2})
+    bribe.set_recipient(user, {'from': voter2})
     tx = bribe.claim_reward(gauge1, token1, {'from': voter2})
-    assert bribe.reward_delegate(voter2) == user
+    assert bribe.reward_recipient(voter2) == user
     assert userbal < token1.balanceOf(user)
     assert voterbal == token1.balanceOf(voter2)
 
@@ -102,16 +102,16 @@ def test_delegate(
 
     # Get same results when we call on behalf of
     tx = bribe.claim_reward_for(voter2, gauge1, token1, {'from': user})
-    assert bribe.reward_delegate(voter2) == user
+    assert bribe.reward_recipient(voter2) == user
     assert userbal < token1.balanceOf(user)
     assert voterbal == token1.balanceOf(voter2)
 
     chain.undo(1)
 
     # Get same results when we call on behalf of
-    bribe.clear_delegate({'from': voter2})
+    bribe.clear_recipient({'from': voter2})
     tx = bribe.claim_reward_for(voter2, gauge1, token1, {'from': user})
-    assert bribe.reward_delegate(voter2) != user
+    assert bribe.reward_recipient(voter2) != user
     assert userbal == token1.balanceOf(user)
     assert voterbal < token1.balanceOf(voter2)
 

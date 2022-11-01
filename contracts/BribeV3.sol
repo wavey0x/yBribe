@@ -90,6 +90,7 @@ contract BribeV3 {
         return _gauges_per_reward[reward];
     }
     
+    /// @dev Required to sync gauge to new week. Can be triggered either by claiming bribes or adding bribes to gauge/token pair.
     function _update_period(address gauge, address reward_token) internal returns (uint) {
         uint _period = active_period[gauge][reward_token];
         if (block.timestamp >= _period + WEEK) {
@@ -122,10 +123,6 @@ contract BribeV3 {
         return true;
     }
     
-    function tokens_for_bribe(address user, address gauge, address reward_token) external view returns (uint) {
-        return uint(int(VE.get_last_user_slope(user))) * reward_per_token[gauge][reward_token] / PRECISION;
-    }
-    
     /// @notice Estimate pending bribe amount for any user
     /// @dev This function reverts if ever the active period for a gauge/token combination is stale.
     function claimable(address user, address gauge, address reward_token) external view returns (uint) {
@@ -149,12 +146,6 @@ contract BribeV3 {
         uint _user_bias = _calc_bias(vs.slope, vs.end);
         _amount = _user_bias * reward_per_token[gauge][reward_token] / PRECISION;
         return _amount;
-    }
-
-    function _calc_bias(uint _slope, uint _end) internal view returns (uint) {
-        uint current = current_period();
-        if (current + WEEK >= _end) return 0;
-        return _slope * (_end - current);
     }
 
     function claim_reward(address gauge, address reward_token) external returns (uint) {
@@ -199,26 +190,36 @@ contract BribeV3 {
         return _amount;
     }
 
-    function min(uint256 a, uint256 b) internal pure returns (uint256) {
-        return a < b ? a : b;
+    /// @dev Compute bias from slope and lock end
+    /// @param _slope User's slope
+    /// @param _end Timestamp of user's lock end
+    function _calc_bias(uint _slope, uint _end) internal view returns (uint) {
+        uint current = current_period();
+        if (current + WEEK >= _end) return 0;
+        return _slope * (_end - current);
     }
 
+    /// @dev Sum all blacklisted bias for any gauge in current period.
     function get_blacklisted_bias(address gauge) public view returns (uint) {
         uint bias;
         uint length = blacklist.length();
         for (uint i = 0; i < length; i++) {
             address user = blacklist.at(i);
             GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
-            bias = _calc_bias(vs.slope, vs.end);
+            bias += _calc_bias(vs.slope, vs.end);
         }
         return bias;
     }
 
+    /// @notice Allow owner to add address to blacklist, preventing them from claiming
+    /// @dev Any vote weight address added
     function add_to_blacklist(address _user) external {
         require(msg.sender == owner, "!owner");
         if(blacklist.add(_user)) emit Blacklisted(_user);
     }
 
+    /// @notice Allow owner to remove address from blacklist
+    /// @dev We set a next_claim_time to prevent access to current period's bribes
     function remove_from_blacklist(address _user) external {
         require(msg.sender == owner, "!owner");
         if(blacklist.remove(_user)){
@@ -227,10 +228,12 @@ contract BribeV3 {
         }
     }
 
+    /// @notice Check if address is blacklisted
     function is_blacklisted(address address_to_check) public view returns (bool) {
         return blacklist.contains(address_to_check);
     }
 
+    /// @dev Helper function, if possible, avoid using on-chain as list can grow unbounded
     function get_blacklist() public view returns (address[] memory _blacklist) {
         _blacklist = new address[](blacklist.length());
         for (uint256 i; i < blacklist.length(); i++) {
@@ -238,15 +241,17 @@ contract BribeV3 {
         }
     }
 
+    /// @dev Helper function to determine current period globally. Not specific to any gauges or internal state.
     function current_period() public view returns (uint) {
         return block.timestamp / WEEK * WEEK;
     }
 
-    function set_delegate(address _recipient) external {
-        require (_recipient != msg.sender, "Can't delegate to self");
-        require (_recipient != address(0), "Can't delegate to 0x0");
+    /// @notice Allow any user to route claimed rewards to a specified recipient address
+    function set_recipient(address _recipient) external {
+        require (_recipient != msg.sender, "self");
+        require (_recipient != address(0), "0x0");
         address current_recipient = reward_recipient[msg.sender];
-        require (_recipient != current_recipient, "Already delegated to this address");
+        require (_recipient != current_recipient, "Already set");
         
         // Update delegation mapping
         reward_recipient[msg.sender] = _recipient;
@@ -290,6 +295,10 @@ contract BribeV3 {
         owner = _pending_owner;
         emit ChangeOwner(_pending_owner);
         pending_owner = address(0);
+    }
+
+    function min(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a < b ? a : b;
     }
 
     function _safeTransfer(

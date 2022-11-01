@@ -76,18 +76,3 @@ def test_blacklist_bias(
     # print(f'Percent Bias: {round(user_bias2/gauge_bias*100, 3)}%')
     print(f'Percent Bias: {round(user_bias3/gauge_bias*100, 3)}%')
     # print(f'Percent Bias: {round(user_bias4/gauge_bias*100, 3)}%')
-    assert False
-
-    bribe.cla
-    assert period_updated['blacklisted_bias'] == 0
-    tx = bribe.add_reward_amount(gauge2, token2, 1, {'from': token2_whale})
-    period_updated = tx.events["PeriodUpdated"]
-    c = bribe.claimable(voter1, gauge2, token2)
-
-    period_updated = tx.events["PeriodUpdated"]
-
-    tx = bribe.claim_reward(gauge2, token2, {'from': voter1})
-    assert tx.return_value == c
-
-    gauge_controller.vote_for_gauge_weights(gauge2, 0,{'from': voter1})
-    gauge_controller.vote_for_gauge_weights(gauge2, 0,{'from': voter2})
