@@ -40,7 +40,7 @@ contract BribeV3 {
     event SetRewardRecipient(address indexed user, address recipient);
     event ClearRewardRecipient(address indexed user, address recipient);
     event ChangeOwner(address owner);
-    event PeriodUpdated(address indexed gauge, uint period, uint bias, uint blacklisted_bias);
+    event PeriodUpdated(address indexed gauge, uint indexed period, uint bias, uint blacklisted_bias);
     event FeeUpdated(uint fee);
 
     uint constant WEEK = 86400 * 7;
@@ -147,13 +147,14 @@ contract BribeV3 {
         return _claim_reward(msg.sender, gauge, reward_token);
     }
 
-    function claim_reward_for_many(address[] calldata _users, address[] calldata _gauges, address[] calldata _reward_tokens) external returns (uint) {
+    function claim_reward_for_many(address[] calldata _users, address[] calldata _gauges, address[] calldata _reward_tokens) external returns (uint[] memory amounts) {
         require(_users.length == _gauges.length && _users.length == _reward_tokens.length, "!lengths");
         uint length = _users.length;
+        amounts = new uint[](length);
         for (uint i = 0; i < length; i++) {
-            _claim_reward(_users[i], _gauges[i], _reward_tokens[i]);
+            amounts[i] = _claim_reward(_users[i], _gauges[i], _reward_tokens[i]);
         }
-        return length;
+        return amounts;
     }
 
     function claim_reward_for(address user, address gauge, address reward_token) external returns (uint) {
@@ -172,7 +173,6 @@ contract BribeV3 {
                 GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
                 uint _user_bias = _calc_bias(vs.slope, vs.end);
                 _amount = _user_bias * reward_per_token[gauge][reward_token] / PRECISION;
-                _amount = min(_amount, erc20(reward_token).balanceOf(address(this)));
                 if (_amount > 0) {
                     claims_per_gauge[gauge][reward_token] += _amount;
                     address recipient = reward_recipient[user];
@@ -290,10 +290,6 @@ contract BribeV3 {
         owner = _pending_owner;
         emit ChangeOwner(_pending_owner);
         pending_owner = address(0);
-    }
-
-    function min(uint a, uint b) internal pure returns (uint256) {
-        return a < b ? a : b;
     }
 
     function _safeTransfer(
