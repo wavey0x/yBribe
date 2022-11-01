@@ -30,7 +30,7 @@ interface erc20 {
     function approve(address spender, uint amount) external returns (bool);
 }
 
-contract BribeV3 {
+contract yBribe {
     using EnumerableSet for EnumerableSet.AddressSet;
 
     event RewardAdded(address indexed briber, address indexed gauge, address indexed reward_token, uint amount, uint fee);

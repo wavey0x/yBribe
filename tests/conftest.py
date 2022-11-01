@@ -32,8 +32,8 @@ def user(accounts, crv, vecrv):
     yield user
 
 @pytest.fixture
-def bribe(user, BribeV3):
-    bribe = user.deploy(BribeV3)
+def bribe(user, yBribe):
+    bribe = user.deploy(yBribe)
     return bribe
 
 @pytest.fixture
