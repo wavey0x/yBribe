@@ -1,6 +1,6 @@
 
 import brownie
-from brownie import Contract, accounts, chain, web3
+from brownie import Contract, accounts, chain, web3, BribeV3
 import pytest
 
 def main():
@@ -26,3 +26,32 @@ def main():
 def next_time():
     WEEK = 60 * 60 * 24 * 7
     return int(chain.time() / WEEK) * WEEK + WEEK
+
+from eth_utils import to_checksum_address
+from web3 import Web3
+from brownie import Contract, convert
+
+def test_create2():
+    """Test the CREATE2 opcode Python.
+
+    EIP-104
+    https://github.com/ethereum/EIPs/blob/master/EIPS/eip-1014.md
+    """
+    address = '0x0000000000000000000000000000000000000000'
+    init_code = BribeV3.bytecode
+    pre = '0xff'
+    b_pre = bytes.fromhex(pre[2:])
+    b_address = bytes.fromhex(address[2:])
+    b_init_code = bytes.fromhex(init_code[2:])
+    keccak_b_init_code = Web3.keccak(b_init_code)
+    found = False
+    i = 0
+    while not found:
+        salt = convert.to_bytes(i, "bytes32")
+        b_result = Web3.keccak(b_pre + b_address + salt + keccak_b_init_code)
+        result_address = to_checksum_address(b_result[12:].hex())
+        print(f'{result_address} {salt}')
+        if result_address[2:6].lower() == 'b71be':
+            found = True
+            print('🎉🍾🥳🍻')
+        i += 1
