@@ -41,8 +41,8 @@ contract BribeV3 {
     event RewardClaimed(address indexed user, address indexed gauge, address indexed reward_token, uint amount);
     event Blacklisted(address indexed user);
     event RemovedFromBlacklist(address indexed user);
-    event SetRewardDelegate(address indexed user, address delegate);
-    event ClearRewardDelegate(address indexed user, address delegate);
+    event SetRewardRecipient(address indexed user, address recipient);
+    event ClearRewardRecipient(address indexed user, address recipient);
     event ChangeOwner(address owner);
     event PeriodUpdated(address indexed gauge, uint period, uint bias, uint blacklisted_bias);
     event FeeUpdated(uint fee);
@@ -70,7 +70,7 @@ contract BribeV3 {
     address public fee_recipient = 0x93A62dA5a14C80f265DAbC077fCEE437B1a0Efde;
     address public pending_owner;
     uint public fee_percent = 100; // Expressed in BPS
-    mapping(address => address) public reward_delegate;
+    mapping(address => address) public reward_recipient;
     EnumerableSet.AddressSet private blacklist;
     
     function _add(address gauge, address reward) internal {
@@ -128,9 +128,6 @@ contract BribeV3 {
     
     /// @notice Estimate pending bribe amount for any user
     /// @dev This function reverts if ever the active period for a gauge/token combination is stale.
-    /// @param user User address to query
-    /// @param gauge Gauge to query
-    /// @param reward_token Reward token to query
     function claimable(address user, address gauge, address reward_token) external view returns (uint) {
         uint _period = current_period();
         if(blacklist.contains(user) || next_claim_time[user] > _period){
@@ -189,38 +186,17 @@ contract BribeV3 {
                 GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
                 uint _user_bias = _calc_bias(vs.slope, vs.end);
                 _amount = _user_bias * reward_per_token[gauge][reward_token] / PRECISION;
-                // _amount = min(_amount, erc20(reward_token).balanceOf(address(this)));
+                _amount = min(_amount, erc20(reward_token).balanceOf(address(this)));
                 if (_amount > 0) {
                     claims_per_gauge[gauge][reward_token] += _amount;
-                    address delegate = reward_delegate[user];
-                    address recipient = delegate == address(0) ? user : delegate;
+                    address recipient = reward_recipient[user];
+                    recipient = recipient == address(0) ? user : recipient;
                     _safeTransfer(reward_token, recipient, _amount);
                     emit RewardClaimed(user, gauge, user, _amount);
                 }
             }
         }
         return _amount;
-    }
-    
-    function _safeTransfer(
-        address token,
-        address to,
-        uint256 value
-    ) internal {
-        (bool success, bytes memory data) =
-            token.call(abi.encodeWithSelector(erc20.transfer.selector, to, value));
-        require(success && (data.length == 0 || abi.decode(data, (bool))));
-    }
-    
-    function _safeTransferFrom(
-        address token,
-        address from,
-        address to,
-        uint256 value
-    ) internal {
-        (bool success, bytes memory data) =
-            token.call(abi.encodeWithSelector(erc20.transferFrom.selector, from, to, value));
-        require(success && (data.length == 0 || abi.decode(data, (bool))));
     }
 
     function min(uint256 a, uint256 b) internal pure returns (uint256) {
@@ -266,35 +242,35 @@ contract BribeV3 {
         return block.timestamp / WEEK * WEEK;
     }
 
-    function set_delegate(address delegate) external {
-        require (delegate != msg.sender, "Can't delegate to self");
-        require (delegate != address(0), "Can't delegate to 0x0");
-        address current_delegate = reward_delegate[msg.sender];
-        require (delegate != current_delegate, "Already delegated to this address");
+    function set_delegate(address _recipient) external {
+        require (_recipient != msg.sender, "Can't delegate to self");
+        require (_recipient != address(0), "Can't delegate to 0x0");
+        address current_recipient = reward_recipient[msg.sender];
+        require (_recipient != current_recipient, "Already delegated to this address");
         
         // Update delegation mapping
-        reward_delegate[msg.sender] = delegate;
+        reward_recipient[msg.sender] = _recipient;
         
-        if (current_delegate != address(0)) {
-            emit ClearRewardDelegate(msg.sender, current_delegate);
+        if (current_recipient != address(0)) {
+            emit ClearRewardRecipient(msg.sender, current_recipient);
         }
 
-        emit SetRewardDelegate(msg.sender, delegate);
+        emit SetRewardRecipient(msg.sender, _recipient);
     }
 
-    function clear_delegate() external {
-        address current_delegate = reward_delegate[msg.sender];
-        require (current_delegate != address(0), "No delegate set");
-        
+    /// @notice Allow any user to clear any previously specified reward recipient
+    function clear_recipient() external {
+        address current_recipient = reward_recipient[msg.sender];
+        require (current_recipient != address(0), "No recipient set");
         // update delegation mapping
-        reward_delegate[msg.sender]= address(0);
-        
-        emit ClearRewardDelegate(msg.sender, current_delegate);
+        reward_recipient[msg.sender]= address(0);
+        emit ClearRewardRecipient(msg.sender, current_recipient);
     }
 
+    /// @notice Allow owner to set fees of up to 4% of bribes upon deposit
     function set_fee_percent(uint _percent) external {
         require(msg.sender == owner, "!owner");
-        require(_percent <= 4_000);
+        require(_percent <= 400);
         fee_percent = _percent;
     }
 
@@ -311,10 +287,29 @@ contract BribeV3 {
     function accept_owner() external {
         address _pending_owner = pending_owner;
         require(msg.sender == _pending_owner, "!pending_owner");
-        
         owner = _pending_owner;
         emit ChangeOwner(_pending_owner);
         pending_owner = address(0);
     }
+
+    function _safeTransfer(
+        address token,
+        address to,
+        uint256 value
+    ) internal {
+        (bool success, bytes memory data) =
+            token.call(abi.encodeWithSelector(erc20.transfer.selector, to, value));
+        require(success && (data.length == 0 || abi.decode(data, (bool))));
+    }
     
+    function _safeTransferFrom(
+        address token,
+        address from,
+        address to,
+        uint256 value
+    ) internal {
+        (bool success, bytes memory data) =
+            token.call(abi.encodeWithSelector(erc20.transferFrom.selector, from, to, value));
+        require(success && (data.length == 0 || abi.decode(data, (bool))));
+    }
 }

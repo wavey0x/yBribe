@@ -192,17 +192,11 @@ def test_claimable(token1, token2, token1_whale, bribe, user,
     gauge_controller.checkpoint({'from':voter1})
     gauge_controller.checkpoint_gauge(gauge1, {'from': voter1})
     gauge_controller.checkpoint_gauge(gauge2, {'from': voter2})
+    with brownie.reverts():
+        bribe.claimable(voter1, gauge1, token1)
+        bribe.claimable(voter1, gauge2, token2)
 
-    assert False
-
-    # Here we hvae to poke the gauge/update the period
-    tx = bribe.add_reward_amount(gauge1, token1, 1, {'from': token1_whale})
-    tx = bribe.add_reward_amount(gauge2, token2, 1, {'from': token2_whale})
-    
-    print(gauge_controller.vote_user_slopes(voter1, gauge1).dict())
-    print(gauge_controller.vote_user_slopes(voter2, gauge2).dict())
-    assert bribe.claimable(voter1, gauge1, token1) > after1
-    assert bribe.claimable(voter2, gauge2, token2) > after2
-
-    gauge_controller.vote_for_gauge_weights(gauge2, 0,{'from': voter1})
-    gauge_controller.vote_for_gauge_weights(gauge2, 0,{'from': voter2})
+    bribe.claim_reward(gauge1, token1, {'from':user})
+    bribe.claim_reward(gauge2, token2, {'from':user})
+    bribe.claimable(voter1, gauge1, token1)
+    bribe.claimable(voter1, gauge2, token2)
