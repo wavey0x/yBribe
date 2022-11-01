@@ -1,6 +1,7 @@
 import brownie
 from brownie import Contract, accounts, chain
 import pytest
+from utils import to_address
 
 def test_operation(
     token1, token2, token1_whale, bribe, user,
@@ -38,29 +39,22 @@ def test_operation(
     tx = bribe.add_reward_amount(gauge1, token1, 1, {'from': token1_whale})
     tx = bribe.add_reward_amount(gauge2, token2, 1, {'from': token2_whale})
     
-    print(gauge_controller.vote_user_slopes(voter1, gauge1).dict())
-    print(gauge_controller.vote_user_slopes(voter2, gauge2).dict())
-    assert bribe.claimable(voter1, gauge1, token1) > after1
-    assert bribe.claimable(voter2, gauge2, token2) > after2
+    v1 = gauge_controller.vote_user_slopes(voter1, gauge1).dict()
+    v2 = gauge_controller.vote_user_slopes(voter2, gauge1).dict()
+    print(v1)
+    print(v2)
+    if v1['power'] > 0:
+        assert bribe.claimable(voter1, gauge1, token1) > after1
+    else:
+        assert bribe.claimable(voter1, gauge1, token1) == 0
+    
+    if v2['power'] > 0:
+        assert bribe.claimable(voter2, gauge1, token1) > after2
+    else:
+        assert bribe.claimable(voter2, gauge1, token1) == 0
 
-    gauge_controller.vote_for_gauge_weights(gauge2, 0,{'from': voter1})
-    gauge_controller.vote_for_gauge_weights(gauge2, 0,{'from': voter2})
-
-   
-def test_blacklist_add_remove(
-    token1, token2, token1_whale, bribe, gov,
-    token2_whale, gauge1, gauge2, gauge_controller, voter1, voter2
-):
-    bribe.add_to_blacklist(voter1,{'from': gov})
-    bribe.add_to_blacklist(voter2,{'from': gov})
-    for i in range(0,20):
-        try:
-            assert bribe.blacklist(i) in [voter1, voter2]
-        except:
-            assert i > 1
-    bribe.remove_from_blacklist(voter1, {'from': gov})
-    assert bribe.blacklist(0) == voter2
-    bribe.remove_from_blacklist(voter2, {'from': gov})
+    # gauge_controller.vote_for_gauge_weights(gauge2, 0,{'from': voter1})
+    # gauge_controller.vote_for_gauge_weights(gauge2, 0,{'from': voter2})
 
 def test_claim_reward_for_many(
     token1, token2, token1_whale, bribe, gov, accounts, WEEK, user,
@@ -150,7 +144,7 @@ def test_checkpoint_gauge(
     gauge_controller.checkpoint_gauge(gauge2, {'from': voter2})
     a1 = gauge_controller.time_weight(gauge1)
     a2 = gauge_controller.time_weight(gauge2)
-    assert a1 > b1 and a2 > a1
+    assert a1 > b1 and a2 > b2
 
 
 
@@ -167,3 +161,48 @@ def test(gauge1):
     c_slope = gauge_controller.vote_user_slopes(convex_voter, gauge).dict()["slope"] / decimals
 
     print(f'Total: {total_slope}\nConvex: {c_slope}\nYearn: {y_slope}')
+
+def test_claimable(token1, token2, token1_whale, bribe, user,
+    token2_whale, gauge1, gauge2, gauge_controller, voter1, voter2
+):
+
+    WEEK = 86400 * 7
+    period = int(chain.time() / WEEK) * WEEK
+
+    # Poke gauges
+    bribe.claim_reward(gauge1, token1, {'from':user})
+    bribe.claim_reward(gauge2, token2, {'from':user})
+
+    token1.approve(bribe, 2**256-1, {'from': token1_whale})
+    token2.approve(bribe, 2**256-1, {'from': token2_whale})
+
+    before1 = bribe.claimable(voter1, gauge1, token1)
+    before2 = bribe.claimable(voter1, gauge1, token1)
+    bribe.add_reward_amount(gauge1, token1, 2_000e18, {'from': token1_whale})
+    bribe.add_reward_amount(gauge2, token2, 5_000e18, {'from': token2_whale})
+    after1 = bribe.claimable(voter1, gauge1, token1)
+    after2 = bribe.claimable(voter2, gauge2, token2)
+    # Ensure claimable amount doesn't change. 
+    # This test verifies that user must wait until following week to claim newly added rewards
+    assert before1 == after1
+    assert before2 == after2
+
+    chain.sleep(WEEK)
+    chain.mine(1)
+    gauge_controller.checkpoint({'from':voter1})
+    gauge_controller.checkpoint_gauge(gauge1, {'from': voter1})
+    gauge_controller.checkpoint_gauge(gauge2, {'from': voter2})
+
+    assert False
+
+    # Here we hvae to poke the gauge/update the period
+    tx = bribe.add_reward_amount(gauge1, token1, 1, {'from': token1_whale})
+    tx = bribe.add_reward_amount(gauge2, token2, 1, {'from': token2_whale})
+    
+    print(gauge_controller.vote_user_slopes(voter1, gauge1).dict())
+    print(gauge_controller.vote_user_slopes(voter2, gauge2).dict())
+    assert bribe.claimable(voter1, gauge1, token1) > after1
+    assert bribe.claimable(voter2, gauge2, token2) > after2
+
+    gauge_controller.vote_for_gauge_weights(gauge2, 0,{'from': voter1})
+    gauge_controller.vote_for_gauge_weights(gauge2, 0,{'from': voter2})
