@@ -46,7 +46,6 @@ contract BribeV3 {
     uint constant WEEK = 86400 * 7;
     uint constant PRECISION = 10**18;
     uint constant BPS = 10_000;
-    uint constant MAX_TIME = 4 * 365 days;
     GaugeController constant GAUGE = GaugeController(0x2F50D538606Fa9EDD2B11E2446BEb18C9D5846bB);
     
     mapping(address => mapping(address => uint)) public claims_per_gauge;
