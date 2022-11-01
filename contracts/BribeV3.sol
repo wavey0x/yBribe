@@ -44,7 +44,7 @@ contract BribeV3 {
     event SetRewardDelegate(address indexed user, address delegate);
     event ClearRewardDelegate(address indexed user, address delegate);
     event ChangeOwner(address owner);
-    event PeriodUpdated(uint period, uint bias, uint blacklisted_bias);
+    event PeriodUpdated(address gauge, uint period, uint bias, uint blacklisted_bias);
     event FeeUpdated(uint fee);
 
     uint constant WEEK = 86400 * 7;
@@ -69,7 +69,7 @@ contract BribeV3 {
     address public owner = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52;
     address public fee_recipient = 0x93A62dA5a14C80f265DAbC077fCEE437B1a0Efde;
     address public pending_owner;
-    uint fee_percent = 100; // Expressed in BPS
+    uint public fee_percent = 100; // Expressed in BPS
     mapping(address => address) public reward_delegate;
     EnumerableSet.AddressSet private blacklist;
     
@@ -97,10 +97,12 @@ contract BribeV3 {
             GAUGE.checkpoint_gauge(gauge);
             uint _bias = GAUGE.points_weight(gauge, _period).bias;
             uint black_listed_bias = get_blacklisted_bias(gauge);
-            emit PeriodUpdated(_period, _bias, black_listed_bias);
             _bias -= black_listed_bias;
+            emit PeriodUpdated(gauge, _period, _bias, black_listed_bias);
             uint _amount = _reward_per_gauge[gauge][reward_token] - _claims_per_gauge[gauge][reward_token];
-            reward_per_token[gauge][reward_token] = _amount * PRECISION / _bias;
+            if (_bias > 0){
+                reward_per_token[gauge][reward_token] = _amount * PRECISION / _bias;
+            }
             active_period[gauge][reward_token] = _period;
         }
         return _period;
@@ -149,23 +151,23 @@ contract BribeV3 {
             uint rewards_available = _reward_per_gauge[gauge][reward_token] - _claims_per_gauge[gauge][reward_token];
             uint _reward_per_token = rewards_available * PRECISION / _bias;
             GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
-            uint _user_bias = _calc_bias(vs.slope, vs.end, last_user_vote);
+            uint _user_bias = _calc_bias(vs.slope, vs.end);
             _amount = _user_bias * _reward_per_token / PRECISION;
         }
         else{
             GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
-            uint _user_bias = _calc_bias(vs.slope, vs.end, last_user_vote);
+            uint _user_bias = _calc_bias(vs.slope, vs.end);
             _amount = _user_bias * reward_per_token[gauge][reward_token] / PRECISION;
         }
         return _amount;
     }
 
-    function _calc_bias(uint _slope, uint _end, uint _last_user_vote) internal view returns (uint) {
-        if (current_period() + WEEK >= _end) return 0;
-        return _slope * (_end - _last_user_vote);
+    function _calc_bias(uint _slope, uint _end) internal view returns (uint) {
+        uint current = current_period();
+        if (current + WEEK >= _end) return 0;
+        return _slope * (_end - current);
     }
 
-    
     function claim_reward(address gauge, address reward_token) external returns (uint) {
         return _claim_reward(msg.sender, gauge, reward_token);
     }
@@ -191,11 +193,11 @@ contract BribeV3 {
         uint _amount = 0;
         if (last_user_claim[user][gauge][reward_token] < _period) {
             last_user_claim[user][gauge][reward_token] = _period;
-            uint last_vote = GAUGE.last_user_vote(user, gauge);
-            if (last_vote < _period) {
+            if (GAUGE.last_user_vote(user, gauge) < _period) {
                 GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
-                uint _user_bias = _calc_bias(vs.slope, vs.end, last_vote);
+                uint _user_bias = _calc_bias(vs.slope, vs.end);
                 _amount = _user_bias * reward_per_token[gauge][reward_token] / PRECISION;
+                // _amount = min(_amount, erc20(reward_token).balanceOf(address(this)));
                 if (_amount > 0) {
                     _claims_per_gauge[gauge][reward_token] += _amount;
                     address delegate = reward_delegate[user];
@@ -229,20 +231,19 @@ contract BribeV3 {
         require(success && (data.length == 0 || abi.decode(data, (bool))));
     }
 
+    function min(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a < b ? a : b;
+    }
+
     function get_blacklisted_bias(address gauge) public view returns (uint) {
         uint bias;
         uint length = blacklist.length();
         for (uint i = 0; i < length; i++) {
             address user = blacklist.at(i);
-            uint last_user_vote = GAUGE.last_user_vote(user, gauge);
             GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
-            bias = _calc_bias(vs.slope, vs.end, last_user_vote);
+            bias = _calc_bias(vs.slope, vs.end);
         }
         return bias;
-    }
-
-    function current_period() public view returns (uint) {
-        return block.timestamp / WEEK * WEEK;
     }
 
     function add_to_blacklist(address _user) external {
@@ -260,6 +261,17 @@ contract BribeV3 {
 
     function is_blacklisted(address address_to_check) public view returns (bool) {
         return blacklist.contains(address_to_check);
+    }
+
+    function get_blacklist() public view returns (address[] memory _blacklist) {
+        _blacklist = new address[](blacklist.length());
+        for (uint256 i; i < blacklist.length(); i++) {
+            _blacklist[i] = blacklist.at(i);
+        }
+    }
+
+    function current_period() public view returns (uint) {
+        return block.timestamp / WEEK * WEEK;
     }
 
     function set_delegate(address delegate) external {

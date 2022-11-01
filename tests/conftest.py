@@ -6,6 +6,15 @@ from brownie import Contract
 def isolation(fn_isolation):
     pass
 
+@pytest.fixture
+def crv():
+    token_address = "0xD533a949740bb3306d119CC777fa900bA034cd52"
+    yield Contract(token_address)
+
+@pytest.fixture
+def vecrv():
+    token_address = "0x5f3b5DfEb7B28CDbD7FAba78963EE202a494e2A2"
+    yield Contract(token_address)
 
 @pytest.fixture
 def gov(accounts):
@@ -13,9 +22,19 @@ def gov(accounts):
 
 
 @pytest.fixture
-def user(accounts):
-    yield accounts[0]
+def user(accounts, crv, vecrv):
+    user = accounts[0]
+    w = accounts.at("0x8dAE6Cb04688C62d939ed9B68d32Bc62e49970b1", force=True)
+    crv.transfer(user, crv.balanceOf(w), {'from': w})
+    crv.approve(vecrv, 2**256-1, {'from': user})
+    # 2 year lock
+    vecrv.create_lock(crv.balanceOf(user), chain.time() + (2 * 365 * 24 * 60 * 60), {'from': user})
+    yield user
 
+@pytest.fixture
+def bribe(user, BribeV3):
+    bribe = user.deploy(BribeV3)
+    return bribe
 
 @pytest.fixture
 def rewards(accounts):
@@ -54,6 +73,19 @@ def token2(): # INV
     yield Contract(token_address)
 
 @pytest.fixture
+def fresh_token(): # INV
+    token_address = "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984"
+    yield Contract(token_address)
+
+@pytest.fixture
+def fresh_token_whale(accounts, fresh_token, bribe): # INV
+    w = accounts.at('0x1a9C8182C09F50C8318d769245beA52c32BE35BC',force=True)
+    u2 = accounts[1]
+    fresh_token.transfer(u2, fresh_token.balanceOf(w), {'from': w})
+    fresh_token.approve(bribe, 2**256-1, {'from': u2})
+    yield u2
+
+@pytest.fixture
 def gauge1(): # MIM
     return Contract("0xd8b712d29381748dB89c36BCa0138d7c75866ddF")
 
@@ -70,15 +102,13 @@ def token1_whale(accounts):
 def token2_whale(accounts):
     return accounts.at("0x1637e4e9941D55703a7A5E7807d6aDA3f7DCD61B", force=True)
 
+@pytest.fixture
+def token2_whale(accounts):
+    return accounts.at("0x1637e4e9941D55703a7A5E7807d6aDA3f7DCD61B", force=True)
 
 @pytest.fixture
 def gauge_controller():
     return Contract("0x2F50D538606Fa9EDD2B11E2446BEb18C9D5846bB")
-
-@pytest.fixture
-def bribe(user, BribeV3):
-    bribe = user.deploy(BribeV3)
-    return bribe
 
 @pytest.fixture
 def WEEK():
