@@ -93,9 +93,9 @@ contract BribeV3 {
             _period = current_period();
             GAUGE.checkpoint_gauge(gauge);
             uint _bias = GAUGE.points_weight(gauge, _period).bias;
-            uint black_listed_bias = get_blacklisted_bias(gauge);
-            _bias -= black_listed_bias;
-            emit PeriodUpdated(gauge, _period, _bias, black_listed_bias);
+            uint blacklisted_bias = get_blacklisted_bias(gauge);
+            _bias -= blacklisted_bias;
+            emit PeriodUpdated(gauge, _period, _bias, blacklisted_bias);
             uint _amount = reward_per_gauge[gauge][reward_token] - claims_per_gauge[gauge][reward_token];
             if (_bias > 0){
                 reward_per_token[gauge][reward_token] = _amount * PRECISION / _bias;
@@ -125,7 +125,7 @@ contract BribeV3 {
     /// @dev Should not rely on this function for any user case where precision is required.
     function claimable(address user, address gauge, address reward_token) external view returns (uint) {
         uint _period = current_period();
-        if(blacklist.contains(user) || next_claim_time[user] > _period){
+        if(blacklist.contains(user) || next_claim_time[user] > _period) {
             return 0;
         }
         if (last_user_claim[user][gauge][reward_token] >= _period) {
@@ -135,7 +135,9 @@ contract BribeV3 {
         if (last_user_vote >= _period) {
             return 0;
         }
-        if (_period != active_period[gauge][reward_token]) return 0;
+        if (_period != active_period[gauge][reward_token]) {
+            return 0;
+        }
         GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
         uint _user_bias = _calc_bias(vs.slope, vs.end);
         return _user_bias * reward_per_token[gauge][reward_token] / PRECISION;
