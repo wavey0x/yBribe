@@ -192,9 +192,12 @@ def test_claimable(token1, token2, token1_whale, bribe, user,
     gauge_controller.checkpoint({'from':voter1})
     gauge_controller.checkpoint_gauge(gauge1, {'from': voter1})
     gauge_controller.checkpoint_gauge(gauge2, {'from': voter2})
-    with brownie.reverts():
-        bribe.claimable(voter1, gauge1, token1)
-        bribe.claimable(voter1, gauge2, token2)
+    # with brownie.reverts():
+    #     bribe.claimable(voter1, gauge1, token1)
+    #     bribe.claimable(voter1, gauge2, token2)
+
+    assert bribe.claimable(voter1, gauge1, token1) == 0
+    assert bribe.claimable(voter1, gauge2, token2) == 0
 
     bribe.claim_reward(gauge1, token1, {'from':user})
     bribe.claim_reward(gauge2, token2, {'from':user})

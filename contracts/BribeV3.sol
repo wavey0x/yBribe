@@ -119,7 +119,8 @@ contract BribeV3 {
     }
     
     /// @notice Estimate pending bribe amount for any user
-    /// @dev This function reverts if ever the active period for a gauge/token combination is stale.
+    /// @dev This function returns zero if active_period has not yet been updated.
+    /// @dev Should not rely on this function for any user case where precision is required.
     function claimable(address user, address gauge, address reward_token) external view returns (uint) {
         uint _period = current_period();
         if(blacklist.contains(user) || next_claim_time[user] > _period){
@@ -135,12 +136,10 @@ contract BribeV3 {
         if (last_user_vote >= _period) {
             return 0;
         }
-        uint _amount = 0;
-        require(_period == active_period[gauge][reward_token], "Period udpate required");
+        if (_period != active_period[gauge][reward_token]) return 0;
         GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
         uint _user_bias = _calc_bias(vs.slope, vs.end);
-        _amount = _user_bias * reward_per_token[gauge][reward_token] / PRECISION;
-        return _amount;
+        return _user_bias * reward_per_token[gauge][reward_token] / PRECISION;
     }
 
     function claim_reward(address gauge, address reward_token) external returns (uint) {
