@@ -126,9 +126,6 @@ contract BribeV3 {
         if(blacklist.contains(user) || next_claim_time[user] > _period){
             return 0;
         }
-        if (active_period[gauge][reward_token] == 0){
-            return 0;
-        }
         if (last_user_claim[user][gauge][reward_token] >= _period) {
             return 0;
         }
