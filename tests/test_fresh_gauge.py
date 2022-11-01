@@ -17,8 +17,10 @@ def test_fresh_gauge(
     fresh_token = Contract('0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984')
     gauge_controller.add_gauge(fresh_gauge, 2, {'from': admin})
     gauge_controller.vote_for_gauge_weights(fresh_gauge, 19, {'from':user})
-
+    fast_forward(gauge_controller, fresh_gauge, gauge1, gauge2, voter1, voter2)
     tx = bribe.add_reward_amount(fresh_gauge, fresh_token, 1e18, {'from': fresh_token_whale})
+    # Ensure bribes are not immediately claimable by prior voters in same period bribe was added (this was a bug in old contract)
+    assert bribe.claimable(user, fresh_gauge, fresh_token) == 0
 
     fast_forward(gauge_controller, fresh_gauge, gauge1, gauge2, voter1, voter2)
 

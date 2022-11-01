@@ -16,13 +16,13 @@ interface GaugeController {
     
     function vote_user_slopes(address, address) external view returns (VotedSlope memory);
     function last_user_vote(address, address) external view returns (uint);
-    function points_weight(address, uint256) external view returns (Point memory);
+    function points_weight(address, uint) external view returns (Point memory);
     function checkpoint_gauge(address) external;
     function time_total() external view returns (uint);
 }
 
 interface erc20 { 
-    function transfer(address recipient, uint256 amount) external returns (bool);
+    function transfer(address recipient, uint amount) external returns (bool);
     function decimals() external view returns (uint8);
     function balanceOf(address) external view returns (uint);
     function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
@@ -84,7 +84,8 @@ contract BribeV3 {
         return _gauges_per_reward[reward];
     }
     
-    /// @dev Required to sync gauge to new week. Can be triggered either by claiming bribes or adding bribes to gauge/token pair.
+    /// @dev Required to sync each gauge/token pair to new week.
+    /// @dev Can be triggered either by claiming or adding bribes to gauge/token pair.
     function _update_period(address gauge, address reward_token) internal returns (uint) {
         uint _period = active_period[gauge][reward_token];
         if (block.timestamp >= _period + WEEK) {
@@ -149,7 +150,7 @@ contract BribeV3 {
     function claim_reward_for_many(address[] calldata _users, address[] calldata _gauges, address[] calldata _reward_tokens) external returns (uint) {
         require(_users.length == _gauges.length && _users.length == _reward_tokens.length, "!lengths");
         uint length = _users.length;
-        for (uint256 i = 0; i < length; i++) {
+        for (uint i = 0; i < length; i++) {
             _claim_reward(_users[i], _gauges[i], _reward_tokens[i]);
         }
         return length;
@@ -230,7 +231,7 @@ contract BribeV3 {
     /// @dev Helper function, if possible, avoid using on-chain as list can grow unbounded
     function get_blacklist() public view returns (address[] memory _blacklist) {
         _blacklist = new address[](blacklist.length());
-        for (uint256 i; i < blacklist.length(); i++) {
+        for (uint i; i < blacklist.length(); i++) {
             _blacklist[i] = blacklist.at(i);
         }
     }
@@ -291,14 +292,14 @@ contract BribeV3 {
         pending_owner = address(0);
     }
 
-    function min(uint256 a, uint256 b) internal pure returns (uint256) {
+    function min(uint a, uint b) internal pure returns (uint256) {
         return a < b ? a : b;
     }
 
     function _safeTransfer(
         address token,
         address to,
-        uint256 value
+        uint value
     ) internal {
         (bool success, bytes memory data) =
             token.call(abi.encodeWithSelector(erc20.transfer.selector, to, value));
@@ -309,7 +310,7 @@ contract BribeV3 {
         address token,
         address from,
         address to,
-        uint256 value
+        uint value
     ) internal {
         (bool success, bytes memory data) =
             token.call(abi.encodeWithSelector(erc20.transferFrom.selector, from, to, value));
