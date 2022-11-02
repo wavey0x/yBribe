@@ -37,6 +37,17 @@ def bribe(user, BribeV3):
     return bribe
 
 @pytest.fixture
+def live_bribe( BribeV3):
+    bribe = BribeV3.at('0x03dFdBcD4056E2F92251c7B07423E1a33a7D3F6d')
+    return bribe
+
+@pytest.fixture
+def helper(BribeHelper, user):
+    helper = user.deploy(BribeHelper)
+    return helper
+
+
+@pytest.fixture
 def rewards(accounts):
     yield accounts[1]
 
