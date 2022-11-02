@@ -178,7 +178,7 @@ contract yBribe {
                     address recipient = reward_recipient[user];
                     recipient = recipient == address(0) ? user : recipient;
                     _safeTransfer(reward_token, recipient, _amount);
-                    emit RewardClaimed(user, gauge, user, _amount);
+                    emit RewardClaimed(user, gauge, reward_token, _amount);
                 }
             }
         }
