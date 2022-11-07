@@ -30,43 +30,52 @@ interface erc20 {
 contract OtcBriber{
 
     struct BribeOffer{
-        address briber; // slot one
+        address briber; // slot 
+
+        address receiver; //slot 
         uint96 requiredVeCrvAmount; // max 7bil
         
-        address gauge; //slot 2
+        address gauge; //slot 
 
-        address bribeToken; // slot 3
+        address bribeToken; // slot 
         uint96 bribeId;
         
-        uint168 weeklyBribeAmount; // slot 4
+        uint168 weeklyBribeAmount; // slot 
         uint40 start; // max 34000 years in the future
         uint8 numberOfWeeks;
         uint40 claimed; // we dont use bit 1, so max 39 usable bits
 
+        
     }
 
     event SetRewardRecipient(address indexed user, address recipient);
     event ClearRewardRecipient(address indexed user, address recipient);
-    event NewBribeOffer(address indexed briber, address indexed gauge, uint indexed start, uint numWeeks, uint id, uint requiredVeCrvAmount, address bribeToken, uint weeklyBribeAmount);
-    event BribeClaimed(address indexed briber, address indexed gauge, uint indexed claimPeriod, uint id, uint votedVeCrvAmount, uint requiredVeCrvAmount, address bribeToken, uint weeklyBribeAmount);
-    event BribeRetrieved(address indexed briber, address indexed gauge, uint indexed claimPeriod, uint id, uint requiredVeCrvAmount, address bribeToken, uint weeklyBribeAmount);
-
+    event NewBribeOffer(address indexed receipient, address indexed briber, address indexed gauge, uint  start, uint numWeeks, uint id, uint requiredVeCrvAmount, address bribeToken, uint weeklyBribeAmount);
+    event BribeClaimed(address indexed receipient, address indexed briber, address indexed gauge, uint  claimPeriod, uint id, uint votedVeCrvAmount, uint requiredVeCrvAmount, address bribeToken, uint weeklyBribeAmount);
+    event BribeRetrieved(address indexed receipient, address indexed briber, address indexed gauge, uint claimPeriod, uint id, uint requiredVeCrvAmount, address bribeToken, uint weeklyBribeAmount);
+    event FeeUpdated(uint fee);
+    event ChangeOwner(address owner);
     
     mapping (uint256 => BribeOffer) public bribeOffers;
-    address public rewardRecipient;
+    mapping(address => address) public rewardRecipient;
+    uint256 public fee = 100;
+    uint constant BPS = 10_000;
     uint96 public nextId;
     GaugeController constant GAUGE = GaugeController(0x2F50D538606Fa9EDD2B11E2446BEb18C9D5846bB);
     uint constant WEEK = 86400 * 7;
-    address constant YEARN = 0xF147b8125d2ef93FB6965Db97D6746952a133934; // yearns crv locker and voter
+    // address constant YEARN = 0xF147b8125d2ef93FB6965Db97D6746952a133934; // yearns crv locker and voter
+    address public feeRecipient = 0x93A62dA5a14C80f265DAbC077fCEE437B1a0Efde;
+    address public owner = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52;
+    address public pendingOwner;
 
-    function setupBribe(address _gauge, address _bribeToken, uint168 _weeklyBribeAmount, uint96 _requiredVeCrvAmount, uint8 _numberOfWeeks, uint40 _start) external returns (uint96){
-        return _setupBribe(_gauge,  _bribeToken,  _weeklyBribeAmount,  _requiredVeCrvAmount,  _numberOfWeeks,  _start);
+    function setupBribe(address _receipient, address _gauge, address _bribeToken, uint168 _weeklyBribeAmount, uint96 _requiredVeCrvAmount, uint8 _numberOfWeeks, uint40 _start) external returns (uint96){
+        return _setupBribe(_receipient, _gauge,  _bribeToken,  _weeklyBribeAmount,  _requiredVeCrvAmount,  _numberOfWeeks,  _start);
     }
-    function setupBribe(address _gauge, address _bribeToken, uint168 _weeklyBribeAmount, uint96 _requiredVeCrvAmount, uint8 _numberOfWeeks) external returns (uint96){
-        return _setupBribe(_gauge,  _bribeToken,  _weeklyBribeAmount,  _requiredVeCrvAmount,  _numberOfWeeks, uint40(current_period() + WEEK));
+    function setupBribe(address _receipient, address _gauge, address _bribeToken, uint168 _weeklyBribeAmount, uint96 _requiredVeCrvAmount, uint8 _numberOfWeeks) external returns (uint96){
+        return _setupBribe(_receipient, _gauge,  _bribeToken,  _weeklyBribeAmount,  _requiredVeCrvAmount,  _numberOfWeeks, uint40(current_period() + WEEK));
     }
 
-    function _setupBribe(address _gauge, address _bribeToken, uint168 _weeklyBribeAmount, uint96 _requiredVeCrvAmount, uint8 _numberOfWeeks, uint40 _start) internal returns (uint96 id) {
+    function _setupBribe(address _receipient, address _gauge, address _bribeToken, uint168 _weeklyBribeAmount, uint96 _requiredVeCrvAmount, uint8 _numberOfWeeks, uint40 _start) internal returns (uint96 id) {
         id = nextId;
         nextId = id + 1;
 
@@ -77,27 +86,26 @@ contract OtcBriber{
         _safeTransferFrom(_bribeToken, msg.sender, address(this), uint256(_weeklyBribeAmount) * uint256(_numberOfWeeks));
         
         bribeOffers[id] = BribeOffer(
-            msg.sender, _requiredVeCrvAmount, _gauge, _bribeToken, id, _weeklyBribeAmount, _start, _numberOfWeeks, 0 
+            _receipient, msg.sender, _requiredVeCrvAmount, _gauge, _bribeToken, id, _weeklyBribeAmount, _start, _numberOfWeeks, 0 
         );
 
-        emit NewBribeOffer(msg.sender, _gauge, _start, _numberOfWeeks, id,  _requiredVeCrvAmount, _bribeToken, _weeklyBribeAmount);
+        emit NewBribeOffer(_receipient, msg.sender, _gauge, _start, _numberOfWeeks, id,  _requiredVeCrvAmount, _bribeToken, _weeklyBribeAmount);
 
     }
 
     function set_recipient(address _recipient) external {
         require (_recipient != msg.sender, "self");
-        require (msg.sender == YEARN, "not yearn");
-        address currentRecipient = rewardRecipient;
+        address currentRecipient = rewardRecipient[msg.sender];
         require (_recipient != currentRecipient, "Already set");
         
         // Update delegation mapping
-        rewardRecipient = _recipient;
+        rewardRecipient[msg.sender] = _recipient;
         
         if (currentRecipient != address(0)) {
             emit ClearRewardRecipient(msg.sender, currentRecipient);
         }
-        if (rewardRecipient != address(0)) {
-            emit SetRewardRecipient(msg.sender, rewardRecipient);
+        if (_recipient != address(0)) {
+            emit SetRewardRecipient(msg.sender, _recipient);
         }
     }
 
@@ -110,15 +118,26 @@ contract OtcBriber{
 
         require(_bias != 0, "not claimable");
 
-        address recipient = rewardRecipient;
-        recipient = recipient == address(0) ? YEARN : recipient;
-
-        _safeTransfer(_offer.bribeToken, recipient, _offer.weeklyBribeAmount);
-        uint256 claimingPeriod = _offer.start + ((week-1) * WEEK);
-
-        emit BribeClaimed(_offer.briber, _offer.gauge, claimingPeriod, id, _bias, _offer.requiredVeCrvAmount, _offer.bribeToken, _offer.weeklyBribeAmount);
+        address recipient = rewardRecipient[_offer.receiver];
+        recipient = recipient == address(0) ? _offer.receiver : recipient;
 
         _updateClaimed(week, _offer, id);
+
+        if(recipient == feeRecipient){
+             _safeTransfer(_offer.bribeToken, recipient, _offer.weeklyBribeAmount);
+        }else{
+            uint fee = _offer.weeklyBribeAmount * fee / BPS;
+            uint remaining = _offer.weeklyBribeAmount - fee;
+
+            _safeTransfer(_offer.bribeToken, recipient, remaining);
+            _safeTransfer(_offer.bribeToken, feeRecipient, fee);
+        }
+
+        uint256 claimingPeriod = _offer.start + ((week-1) * WEEK);
+
+        emit BribeClaimed(_offer.receiver, _offer.briber, _offer.gauge, claimingPeriod, id, _bias, _offer.requiredVeCrvAmount, _offer.bribeToken, _offer.weeklyBribeAmount);
+
+       
         
     }
 
@@ -135,23 +154,25 @@ contract OtcBriber{
         require( !_hasClaimed(_offer.claimed, week), "already claimed for this week" ); //bitwise and
 
         bool canRetrieve = false;
-        uint lastYearnVote = GAUGE.last_user_vote(YEARN, _offer.gauge);
-        if(lastYearnVote > claimingPeriod){
+        uint lastVote = GAUGE.last_user_vote(_offer.receiver, _offer.gauge);
+        if(lastVote > claimingPeriod){
             canRetrieve = true;
         }
 
-        uint _bias = _votedAmount( _offer.gauge, lastYearnVote);
+        uint _bias = _votedAmount( _offer.gauge, _offer.receiver, lastVote);
         if(_bias < _offer.requiredVeCrvAmount){
             canRetrieve = true;
         }
 
         require(canRetrieve || block.timestamp > claimingPeriod +  WEEK*4, "too close to claiming period" );
 
+        _updateClaimed(week, _offer, id);
+
         _safeTransfer(_offer.bribeToken, msg.sender, _offer.weeklyBribeAmount);
 
-        emit BribeRetrieved(_offer.briber, _offer.gauge, claimingPeriod, id, _offer.requiredVeCrvAmount, _offer.bribeToken, _offer.weeklyBribeAmount);
+        emit BribeRetrieved(_offer.receiver, _offer.briber, _offer.gauge, claimingPeriod, id, _offer.requiredVeCrvAmount, _offer.bribeToken, _offer.weeklyBribeAmount);
 
-        _updateClaimed(week, _offer, id);
+        
     }
 
     function hasClaimed(uint id, uint week) external view returns (bool){
@@ -181,7 +202,32 @@ contract OtcBriber{
 
     }
 
-    function retrieveAll(uint256 id) external{
+    function setFeeRecipient(address _recipient) external {
+        require(msg.sender == owner, "!owner");
+        feeRecipient = _recipient;
+    }
+
+    function setFee(uint _percent) external {
+        require(msg.sender == owner, "!owner");
+        require(_percent <= 400);
+        fee = _percent;
+    }
+
+    function set_owner(address _newOwner) external {
+        require(msg.sender == owner, "!owner");
+        pendingOwner = _newOwner;
+    }
+
+    function accept_owner() external {
+        address _pendingOwner = pendingOwner;
+        require(msg.sender == _pendingOwner, "!pendingOwner");
+        owner = _pendingOwner;
+        emit ChangeOwner(_pendingOwner);
+        pendingOwner = address(0);
+    }
+
+
+    function retrieveAll(uint256 id) external noReentry{
         require(retrievable(id));
 
         BribeOffer memory _offer = bribeOffers[id];
@@ -191,7 +237,7 @@ contract OtcBriber{
             if(!_hasClaimed(_offer.claimed, i)){
                 uint256 claimingPeriod = _offer.start + ((i-1) * WEEK);
                 _safeTransfer(_offer.bribeToken, msg.sender, _offer.weeklyBribeAmount);
-                emit BribeRetrieved(_offer.briber, _offer.gauge, claimingPeriod, id, _offer.requiredVeCrvAmount, _offer.bribeToken, _offer.weeklyBribeAmount);
+                emit BribeRetrieved(_offer.receiver, _offer.briber, _offer.gauge, claimingPeriod, id, _offer.requiredVeCrvAmount, _offer.bribeToken, _offer.weeklyBribeAmount);
 
             }
         }
@@ -229,12 +275,12 @@ contract OtcBriber{
             return 0;
         }
 
-        uint lastYearnVote = GAUGE.last_user_vote(YEARN, _offer.gauge);
-        if(lastYearnVote >= claimingPeriod){
+        uint lastVote = GAUGE.last_user_vote(_offer.receiver, _offer.gauge);
+        if(lastVote >= claimingPeriod){
             return 0;
         }
 
-        uint _bias = _votedAmount(_offer.gauge, lastYearnVote);
+        uint _bias = _votedAmount(_offer.gauge, _offer.receiver, lastVote);
 
         if(_bias < _offer.requiredVeCrvAmount){
             return 0;
@@ -244,19 +290,19 @@ contract OtcBriber{
 
     }
 
-    function votedAmount(address _gauge) external view returns (uint){
+    function votedAmount(address _gauge, address _voter) external view returns (uint){
 
-        uint lastYearnVote = GAUGE.last_user_vote(YEARN, _gauge);
+        uint lastVote = GAUGE.last_user_vote(_voter, _gauge);
 
-        return _votedAmount( _gauge,  lastYearnVote);
+        return _votedAmount( _gauge, _voter, lastVote);
 
 
     }
 
-    function _votedAmount(address _gauge, uint lastYearnVote) internal view returns (uint){
+    function _votedAmount(address _gauge, address _voter, uint _lastVote) internal view returns (uint){
 
-        GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(YEARN, _gauge);
-        return _calc_bias(vs.slope, vs.end, lastYearnVote);
+        GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(_voter, _gauge);
+        return _calc_bias(vs.slope, vs.end, _lastVote);
 
 
     }
@@ -312,6 +358,15 @@ contract OtcBriber{
         
     }
 
+
+    bool private lock = false;
+    modifier noReentry(){
+        require(lock == false);
+		lock = true;
+		_;
+		lock = false;
+        
+    }
     
 
 }
