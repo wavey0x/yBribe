@@ -6,3 +6,4 @@ build/
 reports/
 env
 scripts/slope.py
+node_modules

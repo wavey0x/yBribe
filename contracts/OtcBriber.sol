@@ -63,7 +63,6 @@ contract OtcBriber{
     uint96 public nextId;
     GaugeController constant GAUGE = GaugeController(0x2F50D538606Fa9EDD2B11E2446BEb18C9D5846bB);
     uint constant WEEK = 86400 * 7;
-    // address constant YEARN = 0xF147b8125d2ef93FB6965Db97D6746952a133934; // yearns crv locker and voter
     address public feeRecipient = 0x93A62dA5a14C80f265DAbC077fCEE437B1a0Efde;
     address public owner = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52;
     address public pendingOwner;
