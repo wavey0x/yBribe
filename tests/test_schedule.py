@@ -21,7 +21,7 @@ def test_schdule_bribes(
     n_periods = 5
     delay = 0
     tx2 = bribe.schedule_reward_amount(gauge1, token1, amount, n_periods, delay, {'from': token1_whale})
-    
+    assert False
     balance = token1.balanceOf(bribe)
     fee = evm_div(int(amount) * int(n_periods) * int(bribe.fee_percent()), 10**18)
     assert balance == int(int(amount) * int(n_periods)) - int(fee)

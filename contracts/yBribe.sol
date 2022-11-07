@@ -155,7 +155,7 @@ contract yBribe {
         amount_per_period -= fee_per;
         uint curr_period = _update_period(gauge, reward_token);
         uint iterator_max = n_periods + delay;
-        for (uint i = delay; i <= iterator_max; i++){
+        for (uint i = delay; i < iterator_max; i++){
             uint scheduled_period = curr_period + (i * WEEK) + WEEK;
             _schedule_for_period(scheduled_period, curr_period, gauge, reward_token, amount_per_period, fee_per);
         }
