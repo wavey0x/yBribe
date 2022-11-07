@@ -1,7 +1,5 @@
 pragma solidity 0.8.6;
 
-import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-
 interface GaugeController {
     struct VotedSlope {
         uint slope;
@@ -31,14 +29,11 @@ interface erc20 {
 }
 
 contract yBribe {
-    using EnumerableSet for EnumerableSet.AddressSet;
 
     event RewardAdded(address indexed briber, uint period, address indexed gauge, address indexed reward_token, uint amount, uint fee);
     event RewardScheduled(address indexed briber, uint period, address indexed gauge, address indexed reward_token, uint amount, uint fee, uint n_periods, uint delay);
     event NewTokenReward(address indexed gauge, address indexed reward_token); // Specifies unique token added for first time to gauge
     event RewardClaimed(address indexed user, address indexed gauge, address indexed reward_token, uint amount);
-    event Blacklisted(address indexed user);
-    event RemovedFromBlacklist(address indexed user);
     event SetRewardRecipient(address indexed user, address recipient);
     event ClearRewardRecipient(address indexed user, address recipient);
     event ChangeOwner(address owner);
@@ -48,6 +43,7 @@ contract yBribe {
     uint constant WEEK = 86400 * 7;
     uint constant PRECISION = 10**18;
     GaugeController constant GAUGE = GaugeController(0x2F50D538606Fa9EDD2B11E2446BEb18C9D5846bB);
+    address constant BLACKLISTED_USER = 0x989AEb4d175e16225E39E87d0D97A3360524AD80;
     
     mapping(address => mapping(address => uint)) public claims_per_gauge;
     mapping(address => mapping(address => uint)) public reward_per_gauge;
@@ -66,7 +62,6 @@ contract yBribe {
     address public pending_owner;
     uint public fee_percent = 1e16; // 1e16 is 1%; 1e18 is 100%
     mapping(address => address) public reward_recipient;
-    EnumerableSet.AddressSet private blacklist;
     
     /// @dev add reward/gauge pair if it hasn't been already
     function _add(address gauge, address reward) internal {
@@ -181,7 +176,7 @@ contract yBribe {
     /// @dev Should not rely on this function for any user case where precision is required.
     function claimable(address user, address gauge, address reward_token) external view returns (uint) {
         uint _period = current_period();
-        if(blacklist.contains(user) || next_claim_time[user] > _period) {
+        if(user == BLACKLISTED_USER || next_claim_time[user] > _period) {
             return 0;
         }
         if (last_user_claim[user][gauge][reward_token] >= _period) {
@@ -218,7 +213,7 @@ contract yBribe {
     }
     
     function _claim_reward(address user, address gauge, address reward_token) internal returns (uint) {
-        if(blacklist.contains(user) || next_claim_time[user] > current_period()){
+        if(user == BLACKLISTED_USER || next_claim_time[user] > current_period()){
             return 0;
         }
         uint _period = _update_period(gauge, reward_token);
@@ -250,46 +245,10 @@ contract yBribe {
         return _slope * (_end - current);
     }
 
-    /// @dev Sum all blacklisted bias for any gauge in current period.
+    /// @dev Find blacklisted bias for any gauge in current period.
     function get_blacklisted_bias(address gauge) public view returns (uint) {
-        uint bias;
-        uint length = blacklist.length();
-        for (uint i = 0; i < length; i++) {
-            address user = blacklist.at(i);
-            GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
-            bias += _calc_bias(vs.slope, vs.end);
-        }
-        return bias;
-    }
-
-    /// @notice Allow owner to add address to blacklist, preventing them from claiming
-    /// @dev Any vote weight address added
-    function add_to_blacklist(address _user) external {
-        require(msg.sender == owner, "!owner");
-        if(blacklist.add(_user)) emit Blacklisted(_user);
-    }
-
-    /// @notice Allow owner to remove address from blacklist
-    /// @dev We set a next_claim_time to prevent access to current period's bribes
-    function remove_from_blacklist(address _user) external {
-        require(msg.sender == owner, "!owner");
-        if(blacklist.remove(_user)){
-            next_claim_time[_user] = current_period() + WEEK;
-            emit RemovedFromBlacklist(_user);
-        }
-    }
-
-    /// @notice Check if address is blacklisted
-    function is_blacklisted(address address_to_check) public view returns (bool) {
-        return blacklist.contains(address_to_check);
-    }
-
-    /// @dev Helper function, if possible, avoid using on-chain as list can grow unbounded
-    function get_blacklist() public view returns (address[] memory _blacklist) {
-        _blacklist = new address[](blacklist.length());
-        for (uint i; i < blacklist.length(); i++) {
-            _blacklist[i] = blacklist.at(i);
-        }
+        GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(BLACKLISTED_USER, gauge);
+        return _calc_bias(vs.slope, vs.end);
     }
 
     /// @dev Helper function to determine current period globally. Not specific to any gauges or internal state.
