@@ -37,6 +37,11 @@ def bribe(user, yBribe):
     return bribe
 
 @pytest.fixture
+def otc(user, OtcBriber):
+    otc = user.deploy(OtcBriber)
+    return otc
+
+@pytest.fixture
 def live_bribe( BribeV3):
     bribe = BribeV3.at('0x03dFdBcD4056E2F92251c7B07423E1a33a7D3F6d')
     return bribe
@@ -136,4 +141,4 @@ def voter1(accounts):
 
 @pytest.fixture
 def voter2(accounts):
-    return accounts.at("0xF147b8125d2ef93FB6965Db97D6746952a133934", force=True)
+    return accounts.at("0xF147b8125d2ef93FB6965Db97D6746952a133934", force=True) #yearn
