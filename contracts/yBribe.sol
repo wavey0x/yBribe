@@ -100,8 +100,8 @@ contract yBribe {
             if (scheduled_amount != 0) {
                 delete scheduled_rewards[_period][gauge][reward_token]; // @dev: gas refund
             }
+            reward_per_gauge[gauge][reward_token] += scheduled_amount;
             uint _amount = (
-                scheduled_amount +
                 reward_per_gauge[gauge][reward_token] -
                 claims_per_gauge[gauge][reward_token]
             );
