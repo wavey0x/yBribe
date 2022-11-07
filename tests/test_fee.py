@@ -25,15 +25,15 @@ def test_fees(
         fee_amt = tx.events['RewardAdded']['fee']
         assert token1.balanceOf(recipient) > before_bal
         assert token1.balanceOf(recipient) == before_bal + fee_amt
-        assert fee_amt == bribe.fee_percent() / 10_000 * amt
+        assert fee_amt == bribe.fee_percent() / 10**18 * amt
 
 
     # Test adjusting fee
     with brownie.reverts():
-        bribe.set_fee_percent(5_000,{'from':gov})
+        bribe.set_fee_percent(5e16,{'from':gov})
     with brownie.reverts():
-        bribe.set_fee_percent(5_000,{'from':token2_whale})
-    bribe.set_fee_percent(250,{'from':gov})
+        bribe.set_fee_percent(5e16,{'from':token2_whale})
+    bribe.set_fee_percent(2.50e16,{'from':gov})
     # Test adjusting recipient
     with brownie.reverts():
         bribe.set_fee_recipient(gov,{'from':recipient})
@@ -46,4 +46,4 @@ def test_fees(
     fee_amt = tx.events['RewardAdded']['fee']
     assert token1.balanceOf(recipient) > before_bal
     assert token1.balanceOf(recipient) == before_bal + fee_amt
-    assert fee_amt == bribe.fee_percent() / 10_000 * amt
+    assert fee_amt == bribe.fee_percent() / 10**18 * amt

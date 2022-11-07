@@ -34,7 +34,7 @@ contract yBribe {
     using EnumerableSet for EnumerableSet.AddressSet;
 
     event RewardAdded(address indexed briber, uint period, address indexed gauge, address indexed reward_token, uint amount, uint fee);
-    event RewardScheduled(address indexed briber, uint period, address indexed gauge, address indexed reward_token, uint amount, uint fee, uint start_index, uint end_index);
+    event RewardScheduled(address indexed briber, uint period, address indexed gauge, address indexed reward_token, uint amount, uint fee, uint n_periods, uint delay);
     event NewTokenReward(address indexed gauge, address indexed reward_token); // Specifies unique token added for first time to gauge
     event RewardClaimed(address indexed user, address indexed gauge, address indexed reward_token, uint amount);
     event Blacklisted(address indexed user);
@@ -42,19 +42,18 @@ contract yBribe {
     event SetRewardRecipient(address indexed user, address recipient);
     event ClearRewardRecipient(address indexed user, address recipient);
     event ChangeOwner(address owner);
-    event PeriodUpdated(address indexed gauge, uint indexed period, uint bias, uint blacklisted_bias);
+    event PeriodUpdated(address indexed gauge, uint indexed period, uint amount, uint bias, uint blacklisted_bias);
     event FeeUpdated(uint fee);
 
     uint constant WEEK = 86400 * 7;
     uint constant PRECISION = 10**18;
-    uint constant BPS = 10_000;
     GaugeController constant GAUGE = GaugeController(0x2F50D538606Fa9EDD2B11E2446BEb18C9D5846bB);
     
     mapping(address => mapping(address => uint)) public claims_per_gauge;
     mapping(address => mapping(address => uint)) public reward_per_gauge;
     mapping(address => mapping(address => uint)) public reward_per_token;
     mapping(address => mapping(address => uint)) public active_period;
-    mapping(uint => mapping(address => mapping(address => uint))) public scheduled_rewards;
+    mapping(uint => mapping(address => mapping(address => uint))) public scheduled_rewards; // @dev: state 
     mapping(address => mapping(address => mapping(address => uint))) public last_user_claim;
     mapping(address => uint) public next_claim_time;
     
@@ -65,7 +64,7 @@ contract yBribe {
     address public owner = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52;
     address public fee_recipient = 0x93A62dA5a14C80f265DAbC077fCEE437B1a0Efde;
     address public pending_owner;
-    uint public fee_percent = 100; // Expressed in BPS
+    uint public fee_percent = 1e16; // 1e16 is 1%; 1e18 is 100%
     mapping(address => address) public reward_recipient;
     EnumerableSet.AddressSet private blacklist;
     
@@ -97,16 +96,20 @@ contract yBribe {
             uint _bias = GAUGE.points_weight(gauge, _period).bias;
             uint blacklisted_bias = get_blacklisted_bias(gauge);
             _bias -= blacklisted_bias;
-            emit PeriodUpdated(gauge, _period, _bias, blacklisted_bias);
+            uint scheduled_amount = scheduled_rewards[_period][gauge][reward_token];
+            if (scheduled_amount != 0) {
+                delete scheduled_rewards[_period][gauge][reward_token]; // @dev: gas refund
+            }
             uint _amount = (
-                reward_per_gauge[gauge][reward_token] +
-                scheduled_rewards[_period][gauge][reward_token] - 
+                scheduled_amount +
+                reward_per_gauge[gauge][reward_token] -
                 claims_per_gauge[gauge][reward_token]
             );
-
             if (_bias > 0){
-                reward_per_token[gauge][reward_token] = _amount * PRECISION / _bias;
+                _amount = _amount * PRECISION / _bias;
+                reward_per_token[gauge][reward_token] = _amount;
             }
+            emit PeriodUpdated(gauge, _period, _amount, _bias, blacklisted_bias);
             active_period[gauge][reward_token] = _period;
         }
         return _period;
@@ -119,57 +122,57 @@ contract yBribe {
     function add_reward_amount(address gauge, address reward_token, uint amount) external returns (bool) {
         require(GAUGE.gauge_types(gauge) >= 0); // @dev: reverts on invalid gauge
         _safeTransferFrom(reward_token, msg.sender, address(this), amount);
-        uint fee_take = fee_percent * amount / BPS;
+        uint fee_take = fee_percent * amount / PRECISION;
         uint reward_amount = amount - fee_take;
         if (fee_take > 0){
             _safeTransfer(reward_token, fee_recipient, fee_take);
         }
         uint curr_period = _update_period(gauge, reward_token);
-        _schedule_for_period(curr_period, curr_period, gauge, reward_token, amount, fee_take);
+        _schedule_for_period(curr_period + WEEK, curr_period, gauge, reward_token, amount, fee_take);
         return true;
     }
 
     /// @notice Schedule rewards for release in a specific range of future periods
-    /// @dev when scheduling, specify index range where index of 0 is the upcoming period.
-    /// @param gauge gauge to add rewards to
-    /// @param reward_token token address of reward to offer
-    /// @param amount_per_period amount of tokens to offer per period
-    /// @param start_period_index specify 0 to apply rewards to upcoming period
-    /// @param end_period_index specify index of ending period to apply rewards though, where n is the number of periods after the upcoming period.
-    function schedule_reward_amount(address gauge, address reward_token, uint amount_per_period, uint start_period_index, uint end_period_index) external returns (bool) {
+    /// @dev When scheduling, specify index range where index of 0 is the upcoming period.
+    /// @param gauge Gauge to add rewards to
+    /// @param reward_token Token address of reward to offer
+    /// @param amount_per_period Amount of tokens to offer per period
+    /// @param n_periods Number of periods to bribe for. Will be applied to n number of periods beginning with the start period specified by delay.
+    /// @param delay Number of periods after upcoming period from which to start scheduled rewards. 0 starts in upcoming period; 5 starts five weeks after upcoming period.
+    function schedule_reward_amount(address gauge, address reward_token, uint amount_per_period, uint n_periods, uint delay) external returns (bool) {
         require(GAUGE.gauge_types(gauge) >= 0); // @dev: reverts on invalid gauge
-        require(end_period_index <= 20); // @dev: max 20 weeks
-        require(start_period_index <= end_period_index); // @dev: if index values are same, rewards are offered in single period only
+        require(delay <= 20); // @dev: max 20 weeks
+        require(n_periods <= 20); // @dev: max 20 weeks
         // Transfer tokens before updating state variables to prevent re-entry
-        uint num_weeks = end_period_index - start_period_index + 1;
-        uint total_amount = num_weeks * amount_per_period;
+        uint total_amount = n_periods * amount_per_period;
         _safeTransferFrom(reward_token, msg.sender, address(this), total_amount);
-        uint total_fee_take = fee_percent * total_amount / BPS;
+        uint total_fee_take = fee_percent * total_amount / PRECISION;
         uint fee_per;
         if (total_fee_take > 0){
             _safeTransfer(reward_token, fee_recipient, total_fee_take);
-            fee_per = total_fee_take / num_weeks;
+            fee_per = total_fee_take / n_periods;
         }
         amount_per_period -= fee_per;
         uint curr_period = _update_period(gauge, reward_token);
-        uint period;
-        for (uint i = start_period_index; i <= end_period_index; i++){
-            _schedule_for_period(curr_period + (i * WEEK), curr_period, gauge, reward_token, amount_per_period, fee_per);
+        uint iterator_max = n_periods + delay;
+        for (uint i = delay; i <= iterator_max; i++){
+            uint scheduled_period = curr_period + (i * WEEK) + WEEK;
+            _schedule_for_period(scheduled_period, curr_period, gauge, reward_token, amount_per_period, fee_per);
         }
-        emit RewardScheduled(msg.sender, curr_period, gauge, reward_token, total_amount - total_fee_take, total_fee_take, start_period_index, end_period_index);
+        emit RewardScheduled(msg.sender, curr_period, gauge, reward_token, total_amount - total_fee_take, total_fee_take, n_periods, delay);
         return true;
     }
 
-    function _schedule_for_period(uint period, uint curr_period, address gauge, address reward_token, uint reward_amount, uint fee_take) internal {
+    function _schedule_for_period(uint scheduled_period, uint curr_period, address gauge, address reward_token, uint reward_amount, uint fee_take) internal {
         // @dev: if posted in active period, apply to upcoming period. Otherwise, schedule for future period.
-        if (period == curr_period) {
+        if (scheduled_period == curr_period + WEEK) {
             reward_per_gauge[gauge][reward_token] += reward_amount;
         }
         else {
-            scheduled_rewards[period + WEEK][gauge][reward_token] += reward_amount;
+            scheduled_rewards[scheduled_period][gauge][reward_token] += reward_amount;
         }
         _add(gauge, reward_token);
-        emit RewardAdded(msg.sender, period + WEEK, gauge, reward_token, reward_amount, fee_take);
+        emit RewardAdded(msg.sender, scheduled_period, gauge, reward_token, reward_amount, fee_take);
     }
 
     
@@ -323,7 +326,7 @@ contract yBribe {
     /// @notice Allow owner to set fees of up to 4% of bribes upon deposit
     function set_fee_percent(uint _percent) external {
         require(msg.sender == owner, "!owner");
-        require(_percent <= 400);
+        require(_percent <= 4e16); // @dev: max 4%
         fee_percent = _percent;
         emit FeeUpdated(_percent);
     }

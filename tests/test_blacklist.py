@@ -53,7 +53,12 @@ def test_blacklist_bias(
     gauge_controller.checkpoint_gauge(gauge2, {'from': voter2})
     print(gauge_controller.vote_user_slopes(voter1, gauge1).dict())
     print(gauge_controller.vote_user_slopes(voter2, gauge2).dict())
-    tx = bribe.add_reward_amount(gauge1, token1, 1, {'from': token1_whale})
+    tx = bribe.add_reward_amount(gauge1, token1, 10, {'from': token1_whale})
+    chain.sleep(WEEK)
+    chain.mine(1)
+    gauge_controller.checkpoint({'from':voter1})
+    gauge_controller.checkpoint_gauge(gauge1, {'from': voter1})
+    gauge_controller.checkpoint_gauge(gauge2, {'from': voter2})
     period_updated = tx.events["PeriodUpdated"]
     total_bribe = token1.balanceOf(bribe)/1e18
     tx = bribe.claim_reward(gauge1, token1, {'from':voter2})
