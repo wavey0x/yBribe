@@ -272,6 +272,7 @@ contract yBribe {
         require(msg.sender == owner, "!owner");
         require(_percent <= 400);
         fee_percent = _percent;
+        emit FeeUpdated(_percent);
     }
 
     function set_fee_recipient(address _recipient) external {
