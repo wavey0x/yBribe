@@ -130,18 +130,18 @@ contract yBribe {
     }
 
     /// @notice Schedule rewards for release in a specific range of future periods
-    /// @dev when scheduling, specify index range where index=0 is the upcoming period.
+    /// @dev when scheduling, specify index range where index of 0 is the upcoming period.
     /// @param gauge gauge to add rewards to
     /// @param reward_token token address of reward to offer
     /// @param amount_per_period amount of tokens to offer per period
     /// @param start_period_index specify 0 to apply rewards to upcoming period
-    /// @param end_period_index 0 applies rewards to upcoming period
+    /// @param end_period_index specify index of ending period to apply rewards though, where n is the number of periods after the upcoming period.
     function schedule_reward_amount(address gauge, address reward_token, uint amount_per_period, uint start_period_index, uint end_period_index) external returns (bool) {
         require(GAUGE.gauge_types(gauge) >= 0); // @dev: reverts on invalid gauge
         require(end_period_index <= 20); // @dev: max 20 weeks
         require(start_period_index <= end_period_index); // @dev: if index values are same, rewards are offered in single period only
         // Transfer tokens before updating state variables to prevent re-entry
-        uint num_weeks = end_period_index - start_period_index;
+        uint num_weeks = end_period_index - start_period_index + 1;
         uint total_amount = num_weeks * amount_per_period;
         _safeTransferFrom(reward_token, msg.sender, address(this), total_amount);
         uint total_fee_take = fee_percent * total_amount / BPS;

@@ -16,11 +16,17 @@ def test_schdule_bribes(
 
     before1 = bribe.claimable(voter1, gauge1, token1)
     before2 = bribe.claimable(voter1, gauge1, token1)
-    tx1 = bribe.add_reward_amount(gauge1, token1, 2_000e18, {'from': token1_whale})
 
-    tx2 = bribe.schedule_reward_amount(gauge1, token1, 5_000e18, 0, 5, {'from': token1_whale})
-
+    amount = 5_000e18
+    start_index = 0
+    end_index = 5
+    weeks_range = end_index - start_index + 1
+    tx2 = bribe.schedule_reward_amount(gauge1, token1, amount, start_index, end_index, {'from': token1_whale})
     
+    balance = token1.balanceOf(bribe)
+    fee = (amount * weeks_range) * (bribe.fee_percent() / 10_000)
+    assert balance == (amount * weeks_range) - fee
+
     assert False
     after1 = bribe.claimable(voter1, gauge1, token1)
     after2 = bribe.claimable(voter2, gauge2, token2)
