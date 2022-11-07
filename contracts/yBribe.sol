@@ -33,7 +33,8 @@ interface erc20 {
 contract yBribe {
     using EnumerableSet for EnumerableSet.AddressSet;
 
-    event RewardAdded(address indexed briber, address indexed gauge, address indexed reward_token, uint amount, uint fee);
+    event RewardAdded(address indexed briber, uint period, address indexed gauge, address indexed reward_token, uint amount, uint fee);
+    event RewardScheduled(address indexed briber, uint period, address indexed gauge, address indexed reward_token, uint amount, uint fee, uint start_index, uint end_index);
     event NewTokenReward(address indexed gauge, address indexed reward_token); // Specifies unique token added for first time to gauge
     event RewardClaimed(address indexed user, address indexed gauge, address indexed reward_token, uint amount);
     event Blacklisted(address indexed user);
@@ -51,9 +52,9 @@ contract yBribe {
     
     mapping(address => mapping(address => uint)) public claims_per_gauge;
     mapping(address => mapping(address => uint)) public reward_per_gauge;
-    
     mapping(address => mapping(address => uint)) public reward_per_token;
     mapping(address => mapping(address => uint)) public active_period;
+    mapping(uint => mapping(address => mapping(address => uint))) public scheduled_rewards;
     mapping(address => mapping(address => mapping(address => uint))) public last_user_claim;
     mapping(address => uint) public next_claim_time;
     
@@ -68,6 +69,7 @@ contract yBribe {
     mapping(address => address) public reward_recipient;
     EnumerableSet.AddressSet private blacklist;
     
+    /// @dev add reward/gauge pair if it hasn't been already
     function _add(address gauge, address reward) internal {
         if (!_rewards_in_gauge[gauge][reward]) {
             _rewards_per_gauge[gauge].push(reward);
@@ -96,7 +98,12 @@ contract yBribe {
             uint blacklisted_bias = get_blacklisted_bias(gauge);
             _bias -= blacklisted_bias;
             emit PeriodUpdated(gauge, _period, _bias, blacklisted_bias);
-            uint _amount = reward_per_gauge[gauge][reward_token] - claims_per_gauge[gauge][reward_token];
+            uint _amount = (
+                reward_per_gauge[gauge][reward_token] +
+                scheduled_rewards[_period][gauge][reward_token] - 
+                claims_per_gauge[gauge][reward_token]
+            );
+
             if (_bias > 0){
                 reward_per_token[gauge][reward_token] = _amount * PRECISION / _bias;
             }
@@ -105,6 +112,10 @@ contract yBribe {
         return _period;
     }
     
+    /// @notice Add single reward to the upcoming period
+    /// @param gauge gauge to add reward to
+    /// @param reward_token token address of reward to offer
+    /// @param amount amount of tokens to offer as bribe in upcoming period
     function add_reward_amount(address gauge, address reward_token, uint amount) external returns (bool) {
         require(GAUGE.gauge_types(gauge) >= 0); // @dev: reverts on invalid gauge
         _safeTransferFrom(reward_token, msg.sender, address(this), amount);
@@ -113,12 +124,54 @@ contract yBribe {
         if (fee_take > 0){
             _safeTransfer(reward_token, fee_recipient, fee_take);
         }
-        _update_period(gauge, reward_token);
-        reward_per_gauge[gauge][reward_token] += reward_amount;
-        _add(gauge, reward_token);
-        emit RewardAdded(msg.sender, gauge, reward_token, reward_amount, fee_take);
+        uint curr_period = _update_period(gauge, reward_token);
+        _schedule_for_period(curr_period, curr_period, gauge, reward_token, amount, fee_take);
         return true;
     }
+
+    /// @notice Schedule rewards for release in a specific range of future periods
+    /// @dev when scheduling, specify index range where index=0 is the upcoming period.
+    /// @param gauge gauge to add rewards to
+    /// @param reward_token token address of reward to offer
+    /// @param amount_per_period amount of tokens to offer per period
+    /// @param start_period_index specify 0 to apply rewards to upcoming period
+    /// @param end_period_index 0 applies rewards to upcoming period
+    function schedule_reward_amount(address gauge, address reward_token, uint amount_per_period, uint start_period_index, uint end_period_index) external returns (bool) {
+        require(GAUGE.gauge_types(gauge) >= 0); // @dev: reverts on invalid gauge
+        require(end_period_index <= 20); // @dev: max 20 weeks
+        require(start_period_index <= end_period_index); // @dev: if index values are same, rewards are offered in single period only
+        // Transfer tokens before updating state variables to prevent re-entry
+        uint num_weeks = end_period_index - start_period_index;
+        uint total_amount = num_weeks * amount_per_period;
+        _safeTransferFrom(reward_token, msg.sender, address(this), total_amount);
+        uint total_fee_take = fee_percent * total_amount / BPS;
+        uint fee_per;
+        if (total_fee_take > 0){
+            _safeTransfer(reward_token, fee_recipient, total_fee_take);
+            fee_per = total_fee_take / num_weeks;
+        }
+        amount_per_period -= fee_per;
+        uint curr_period = _update_period(gauge, reward_token);
+        uint period;
+        for (uint i = start_period_index; i <= end_period_index; i++){
+            _schedule_for_period(curr_period + (i * WEEK), curr_period, gauge, reward_token, amount_per_period, fee_per);
+        }
+        emit RewardScheduled(msg.sender, curr_period, gauge, reward_token, total_amount - total_fee_take, total_fee_take, start_period_index, end_period_index);
+        return true;
+    }
+
+    function _schedule_for_period(uint period, uint curr_period, address gauge, address reward_token, uint reward_amount, uint fee_take) internal {
+        // @dev: if posted in active period, apply to upcoming period. Otherwise, schedule for future period.
+        if (period == curr_period) {
+            reward_per_gauge[gauge][reward_token] += reward_amount;
+        }
+        else {
+            scheduled_rewards[period + WEEK][gauge][reward_token] += reward_amount;
+        }
+        _add(gauge, reward_token);
+        emit RewardAdded(msg.sender, period + WEEK, gauge, reward_token, reward_amount, fee_take);
+    }
+
     
     /// @notice Estimate pending bribe amount for any user
     /// @dev This function returns zero if active_period has not yet been updated.
@@ -272,6 +325,7 @@ contract yBribe {
         require(msg.sender == owner, "!owner");
         require(_percent <= 400);
         fee_percent = _percent;
+        emit FeeUpdated(_percent);
     }
 
     function set_fee_recipient(address _recipient) external {
