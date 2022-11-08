@@ -144,7 +144,7 @@ contract OtcBriber {
                 _weeklyBribeAmount,
                 _requiredVeCrvAmount,
                 _numberOfWeeks,
-                uint40(current_period() + WEEK)
+                uint40(currentPeriod() + WEEK)
             );
     }
 
@@ -197,7 +197,7 @@ contract OtcBriber {
         );
     }
 
-    function set_recipient(address _recipient) external {
+    function setRecipient(address _recipient) external {
         require(_recipient != msg.sender, "self");
         address currentRecipient = rewardRecipient[msg.sender];
         require(_recipient != currentRecipient, "Already set");
@@ -339,12 +339,12 @@ contract OtcBriber {
         fee = _percent;
     }
 
-    function set_owner(address _newOwner) external {
+    function setOwner(address _newOwner) external {
         require(msg.sender == owner, "!owner");
         pendingOwner = _newOwner;
     }
 
-    function accept_owner() external {
+    function acceptOwner() external {
         address _pendingOwner = pendingOwner;
         require(msg.sender == _pendingOwner, "!pendingOwner");
         owner = _pendingOwner;
@@ -441,7 +441,7 @@ contract OtcBriber {
             _voter,
             _gauge
         );
-        return _calc_bias(vs.slope, vs.end, _lastVote);
+        return _calcBias(vs.slope, vs.end, _lastVote);
     }
 
     function _updateClaimed(
@@ -458,7 +458,7 @@ contract OtcBriber {
         }
     }
 
-    function _calc_bias(
+    function _calcBias(
         uint _slope,
         uint _end,
         uint256 current
@@ -467,7 +467,7 @@ contract OtcBriber {
         return _slope * (_end - current);
     }
 
-    function current_period() public view returns (uint) {
+    function currentPeriod() public view returns (uint) {
         return (block.timestamp / WEEK) * WEEK;
     }
 
