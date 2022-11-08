@@ -37,13 +37,13 @@ contract yBribe {
     event SetRewardRecipient(address indexed user, address recipient);
     event ClearRewardRecipient(address indexed user, address recipient);
     event ChangeOwner(address owner);
-    event PeriodUpdated(address indexed gauge, uint indexed period, uint amount, uint bias, uint blacklisted_bias);
+    event PeriodUpdated(address indexed gauge, uint indexed period, uint amount, uint bias, uint omitted_bias);
     event FeeUpdated(uint fee);
 
     uint constant WEEK = 86400 * 7;
     uint constant PRECISION = 10**18;
     GaugeController constant GAUGE = GaugeController(0x2F50D538606Fa9EDD2B11E2446BEb18C9D5846bB);
-    address constant BLACKLISTED_USER = 0x989AEb4d175e16225E39E87d0D97A3360524AD80;
+    address constant BLOCKED_USER = 0x989AEb4d175e16225E39E87d0D97A3360524AD80;
     
     mapping(address => mapping(address => uint)) public claims_per_gauge;
     mapping(address => mapping(address => uint)) public reward_per_gauge;
@@ -89,8 +89,8 @@ contract yBribe {
             _period = current_period();
             GAUGE.checkpoint_gauge(gauge);
             uint _bias = GAUGE.points_weight(gauge, _period).bias;
-            uint blacklisted_bias = get_blacklisted_bias(gauge);
-            _bias -= blacklisted_bias;
+            uint omitted_bias = get_omitted_bias(gauge);
+            _bias -= omitted_bias;
             uint scheduled_amount = scheduled_rewards[_period][gauge][reward_token];
             if (scheduled_amount != 0) {
                 delete scheduled_rewards[_period][gauge][reward_token]; // @dev: gas refund
@@ -104,7 +104,7 @@ contract yBribe {
                 _amount = _amount * PRECISION / _bias;
                 reward_per_token[gauge][reward_token] = _amount;
             }
-            emit PeriodUpdated(gauge, _period, _amount, _bias, blacklisted_bias);
+            emit PeriodUpdated(gauge, _period, _amount, _bias, omitted_bias);
             active_period[gauge][reward_token] = _period;
         }
         return _period;
@@ -176,7 +176,7 @@ contract yBribe {
     /// @dev Should not rely on this function for any user case where precision is required.
     function claimable(address user, address gauge, address reward_token) external view returns (uint) {
         uint _period = current_period();
-        if(user == BLACKLISTED_USER || next_claim_time[user] > _period) {
+        if(user == BLOCKED_USER || next_claim_time[user] > _period) {
             return 0;
         }
         if (last_user_claim[user][gauge][reward_token] >= _period) {
@@ -213,7 +213,7 @@ contract yBribe {
     }
     
     function _claim_reward(address user, address gauge, address reward_token) internal returns (uint) {
-        if(user == BLACKLISTED_USER || next_claim_time[user] > current_period()){
+        if(user == BLOCKED_USER || next_claim_time[user] > current_period()){
             return 0;
         }
         uint _period = _update_period(gauge, reward_token);
@@ -245,9 +245,9 @@ contract yBribe {
         return _slope * (_end - current);
     }
 
-    /// @dev Find blacklisted bias for any gauge in current period.
-    function get_blacklisted_bias(address gauge) public view returns (uint) {
-        GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(BLACKLISTED_USER, gauge);
+    /// @dev Find total bias to omit on particular gauge.
+    function get_omitted_bias(address gauge) public view returns (uint) {
+        GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(BLOCKED_USER, gauge);
         return _calc_bias(vs.slope, vs.end);
     }
 
