@@ -115,6 +115,49 @@ def test_reward_recipient(
     assert userbal == token1.balanceOf(user)
     assert voterbal < token1.balanceOf(voter2)
 
+def test_claim_delegate(
+    token1, token2, token1_whale, bribe, gov, accounts, WEEK, user,
+    token2_whale, gauge1, gauge2, gauge_controller, voter1, voter2
+):
+    token1.approve(bribe, 2**256-1, {'from': token1_whale})
+    tx = bribe.add_reward_amount(gauge1, token1, 1_000_000e18, {'from': token1_whale})
+
+    chain.sleep(WEEK)
+    chain.mine(1)
+    gauge_controller.checkpoint({'from':voter1})
+    gauge_controller.checkpoint_gauge(gauge1, {'from': voter1})
+    gauge_controller.checkpoint_gauge(gauge2, {'from': voter2})
+
+    # Here we hvae to poke the gauge/update the period
+    tx = bribe.add_reward_amount(gauge1, token1, 1, {'from': token1_whale})
+
+    userbal = token1.balanceOf(user)
+    voterbal = token1.balanceOf(voter2)
+
+    # Claim from voter should always work
+    tx = bribe.claim_reward_for(voter2, gauge1, token1, {'from': voter2})
+    assert len(tx.events['RewardClaimed']) == 1
+    chain.undo(1)
+    # Claim from non delegate should also work
+    tx = bribe.claim_reward_for(voter2, gauge1, token1, {'from': voter1})
+    assert len(tx.events['RewardClaimed']) == 1
+    chain.undo(1)
+    # Claim from new delegate should work
+    bribe.set_claim_delegate(user, {'from': voter2})
+    assert len(tx.events) >= 1
+
+    # Claim from anyone else should not fail and should not emit events
+    tx = bribe.claim_reward_for(voter2, gauge1, token1, {'from': voter1})
+    assert len(tx.events) == 0
+
+    with brownie.reverts():
+        bribe.set_claim_delegate(user)
+    bribe.clear_claim_delegate({'from': voter2})
+    
+    assert bribe.claim_delegate(voter2) == ZERO_ADDRESS
+    bribe.set_claim_delegate(user,{'from': voter2})
+    assert bribe.claim_delegate(voter2) != ZERO_ADDRESS
+
 def change_owner(
     token1, token2, token1_whale, bribe, gov, accounts, WEEK, user,
     token2_whale, gauge1, gauge2, gauge_controller, voter1, voter2

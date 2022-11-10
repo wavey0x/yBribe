@@ -36,6 +36,8 @@ contract yBribe {
     event RewardClaimed(address indexed user, address indexed gauge, address indexed reward_token, uint amount);
     event SetRewardRecipient(address indexed user, address recipient);
     event ClearRewardRecipient(address indexed user, address recipient);
+    event SetClaimDelegate(address indexed user, address new_delegate);
+    event ClearClaimDelegate(address indexed user, address cleared_delegate);
     event ChangeOwner(address owner);
     event PeriodUpdated(address indexed gauge, uint indexed period, uint amount, uint bias, uint omitted_bias);
     event FeeUpdated(uint fee);
@@ -49,9 +51,12 @@ contract yBribe {
     mapping(address => mapping(address => uint)) public reward_per_gauge;
     mapping(address => mapping(address => uint)) public reward_per_token;
     mapping(address => mapping(address => uint)) public active_period;
-    mapping(uint => mapping(address => mapping(address => uint))) public scheduled_rewards; // @dev: state 
+    // @dev: used to track posted bribes in future periods
+    mapping(uint => mapping(address => mapping(address => uint))) public scheduled_rewards;
     mapping(address => mapping(address => mapping(address => uint))) public last_user_claim;
     mapping(address => uint) public next_claim_time;
+    // @dev: Default 0x0 allows any account to claim for bribee. If set, blocks claims from arbitrary accounts.
+    mapping(address => address) public claim_delegate;
     
     mapping(address => address[]) public _rewards_per_gauge;
     mapping(address => address[]) public _gauges_per_reward;
@@ -123,7 +128,7 @@ contract yBribe {
             _safeTransfer(reward_token, fee_recipient, fee_take);
         }
         uint curr_period = _update_period(gauge, reward_token);
-        _schedule_for_period(curr_period + WEEK, curr_period, gauge, reward_token, amount, fee_take);
+        _schedule_for_period(curr_period + WEEK, curr_period, gauge, reward_token, reward_amount, fee_take);
         return true;
     }
 
@@ -213,7 +218,8 @@ contract yBribe {
     }
     
     function _claim_reward(address user, address gauge, address reward_token) internal returns (uint) {
-        if(user == BLOCKED_USER || next_claim_time[user] > current_period()){
+        bool permitted = msg.sender == user || (claim_delegate[user] == address(0) || claim_delegate[user] == msg.sender);
+        if(!permitted || user == BLOCKED_USER || next_claim_time[user] > current_period()){
             return 0;
         }
         uint _period = _update_period(gauge, reward_token);
@@ -277,7 +283,6 @@ contract yBribe {
     function clear_recipient() external {
         address current_recipient = reward_recipient[msg.sender];
         require (current_recipient != address(0), "No recipient set");
-        // update delegation mapping
         reward_recipient[msg.sender]= address(0);
         emit ClearRewardRecipient(msg.sender, current_recipient);
     }
@@ -293,6 +298,30 @@ contract yBribe {
     function set_fee_recipient(address _recipient) external {
         require(msg.sender == owner, "!owner");
         fee_recipient = _recipient;
+    }
+
+    /// @notice Allow to set a claim delegate, effectively blocking others from claiming rewards
+    function set_claim_delegate(address _delegate) external {
+        require (_delegate != msg.sender, "self");
+        require (_delegate != address(0), "Clear First");
+        address current_delegate = claim_delegate[msg.sender];
+        require (_delegate != current_delegate, "Already set");
+        
+        // Update delegation mapping
+        claim_delegate[msg.sender] = _delegate;
+        
+        if (current_delegate != address(0)) {
+            emit ClearClaimDelegate(msg.sender, current_delegate);
+        }
+
+        emit SetClaimDelegate(msg.sender, _delegate);
+    }
+
+    function clear_claim_delegate() external {
+        address current_delegate = claim_delegate[msg.sender];
+        require (current_delegate != address(0), "No recipient set");
+        claim_delegate[msg.sender]= address(0);
+        emit ClearClaimDelegate(msg.sender, current_delegate);
     }
 
     function set_owner(address _new_owner) external {

@@ -7,7 +7,6 @@ def test_fees(
     token2_whale, gauge1, gauge2, gauge_controller, voter1, voter2
 ):
 
-    bribe.add_to_blacklist(voter2, {'from': gov}) # YEARN
     WEEK = 86400 * 7
     period = int(chain.time() / WEEK) * WEEK
 

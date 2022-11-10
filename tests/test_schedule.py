@@ -22,14 +22,14 @@ def test_schdule_bribes(
     delay = 0
     tx = bribe.schedule_reward_amount(gauge1, token1, amount, n_periods, delay, {'from': token1_whale})
     len(tx.events['RewardAdded']) == n_periods
-    assert False
+
     balance = token1.balanceOf(bribe)
     fee = evm_div(int(amount) * int(n_periods) * int(bribe.fee_percent()), 10**18)
     assert balance == int(int(amount) * int(n_periods)) - int(fee)
 
     fee = amount * n_periods * bribe.fee_percent() / 1e18
     assert balance == int(amount) * int(n_periods) - int(fee)
-    assert False
+
 
 # EVM div semantics as a python function
 def evm_div(x, y):

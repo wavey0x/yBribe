@@ -42,10 +42,9 @@ def live_bribe( BribeV3):
     return bribe
 
 @pytest.fixture
-def helper(BribeHelper, user):
-    helper = user.deploy(BribeHelper)
+def helper(BribeHelper, bribe, user):
+    helper = user.deploy(BribeHelper, bribe.address)
     return helper
-
 
 @pytest.fixture
 def rewards(accounts):
