@@ -101,10 +101,7 @@ contract yBribe {
                 delete scheduled_rewards[_period][gauge][reward_token]; // @dev: gas refund
             }
             reward_per_gauge[gauge][reward_token] += scheduled_amount;
-            uint _amount = (
-                reward_per_gauge[gauge][reward_token] -
-                claims_per_gauge[gauge][reward_token]
-            );
+            uint _amount = _max_claim(gauge, reward_token);
             if (_bias > 0){
                 _amount = _amount * PRECISION / _bias;
                 reward_per_token[gauge][reward_token] = _amount;
@@ -230,6 +227,7 @@ contract yBribe {
                 GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
                 uint _user_bias = _calc_bias(vs.slope, vs.end);
                 _amount = _user_bias * reward_per_token[gauge][reward_token] / PRECISION;
+                _amount = _min(_amount, _max_claim(gauge, reward_token));
                 if (_amount > 0) {
                     claims_per_gauge[gauge][reward_token] += _amount;
                     address recipient = reward_recipient[user];
@@ -255,6 +253,14 @@ contract yBribe {
     function get_omitted_bias(address gauge) public view returns (uint) {
         GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(BLOCKED_USER, gauge);
         return _calc_bias(vs.slope, vs.end);
+    }
+
+    /// @dev Returns maximum claim amount for any gauge in current period
+    function _max_claim(address gauge, address reward_token) internal view returns (uint) {
+        return (
+                reward_per_gauge[gauge][reward_token] -
+                claims_per_gauge[gauge][reward_token]
+        );
     }
 
     /// @dev Helper function to determine current period globally. Not specific to any gauges or internal state.
@@ -356,5 +362,9 @@ contract yBribe {
         (bool success, bytes memory data) =
             token.call(abi.encodeWithSelector(erc20.transferFrom.selector, from, to, value));
         require(success && (data.length == 0 || abi.decode(data, (bool))));
+    }
+
+    function _min(uint a, uint b) internal pure returns (uint) {
+        return a < b ? a : b;
     }
 }
