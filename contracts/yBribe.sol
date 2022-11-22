@@ -32,6 +32,7 @@ contract yBribe {
 
     event RewardAdded(address indexed briber, uint period, address indexed gauge, address indexed reward_token, uint amount, uint fee);
     event RewardScheduled(address indexed briber, uint period, address indexed gauge, address indexed reward_token, uint amount, uint fee, uint n_periods, uint delay);
+    event RewardRetrieved(address indexed briber, address indexed gauge, address indexed reward_token, uint scheduled_period, uint amount);
     event NewTokenReward(address indexed gauge, address indexed reward_token); // Specifies unique token added for first time to gauge
     event RewardClaimed(address indexed user, address indexed gauge, address indexed reward_token, uint amount);
     event SetRewardRecipient(address indexed user, address recipient);
@@ -53,6 +54,7 @@ contract yBribe {
     mapping(address => mapping(address => uint)) public active_period;
     // @dev: used to track posted bribes in future periods
     mapping(uint => mapping(address => mapping(address => uint))) public scheduled_rewards;
+    mapping(address => mapping(uint => mapping(address => mapping(address => uint)))) public user_scheduled_rewards;
     mapping(address => mapping(address => mapping(address => uint))) public last_user_claim;
     mapping(address => uint) public next_claim_time;
     // @dev: Default 0x0 allows any account to claim for bribee. If set, blocks claims from arbitrary accounts.
@@ -94,8 +96,13 @@ contract yBribe {
             _period = current_period();
             GAUGE.checkpoint_gauge(gauge);
             uint _bias = GAUGE.points_weight(gauge, _period).bias;
-            uint omitted_bias = get_omitted_bias(gauge);
-            _bias -= omitted_bias;
+            uint last_user_vote = GAUGE.last_user_vote(BLOCKED_USER, gauge);
+            uint omitted_bias;
+            // @dev: Skip bias omission in edge-case where blocked user votes active period prior to _update_period called
+            if(last_user_vote < _period) {
+                omitted_bias = get_omitted_bias(gauge);
+                _bias -= omitted_bias;
+            }
             uint scheduled_amount = scheduled_rewards[_period][gauge][reward_token];
             if (scheduled_amount != 0) {
                 delete scheduled_rewards[_period][gauge][reward_token]; // @dev: gas refund
@@ -167,12 +174,24 @@ contract yBribe {
         }
         else {
             scheduled_rewards[scheduled_period][gauge][reward_token] += reward_amount;
+            user_scheduled_rewards[msg.sender][scheduled_period][gauge][reward_token] += reward_amount;
         }
         _add(gauge, reward_token);
         emit RewardAdded(msg.sender, scheduled_period, gauge, reward_token, reward_amount, fee_take);
     }
 
-    
+    /// @notice Allow briber to reclaim 
+    function retrieve_for_period(uint scheduled_period, address gauge, address reward_token) external {
+        require(scheduled_period < current_period(), "!Past");
+        uint amount = user_scheduled_rewards[msg.sender][scheduled_period][gauge][reward_token];
+        if(amount > 0) {
+            scheduled_rewards[scheduled_period][gauge][reward_token] -= amount;
+            delete user_scheduled_rewards[msg.sender][scheduled_period][gauge][reward_token];
+            _safeTransfer(reward_token, msg.sender, amount);
+            emit RewardRetrieved(msg.sender, gauge, reward_token, scheduled_period, amount);
+        }
+    }
+
     /// @notice Estimate pending bribe amount for any user
     /// @dev This function returns zero if active_period has not yet been updated.
     /// @dev Should not rely on this function for any user case where precision is required.
@@ -258,8 +277,8 @@ contract yBribe {
     /// @dev Returns maximum claim amount for any gauge in current period
     function _max_claim(address gauge, address reward_token) internal view returns (uint) {
         return (
-                reward_per_gauge[gauge][reward_token] -
-                claims_per_gauge[gauge][reward_token]
+            reward_per_gauge[gauge][reward_token] -
+            claims_per_gauge[gauge][reward_token]
         );
     }
 
