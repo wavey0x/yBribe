@@ -21,9 +21,7 @@ interface GaugeController {
 
 interface erc20 { 
     function transfer(address recipient, uint amount) external returns (bool);
-    function balanceOf(address) external view returns (uint);
     function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
-    function approve(address spender, uint amount) external returns (bool);
 }
 
 contract yBribe {
