@@ -57,7 +57,6 @@ contract yBribe {
     mapping(uint => mapping(address => mapping(address => uint))) public scheduled_rewards;
     mapping(address => mapping(uint => mapping(address => mapping(address => uint)))) public user_scheduled_rewards;
     mapping(address => mapping(address => mapping(address => uint))) public last_user_claim;
-    mapping(address => uint) public next_claim_time;
     // @dev: Default 0x0 allows any account to claim for bribee. If set, blocks claims from arbitrary accounts.
     mapping(address => address) public claim_delegate;
     
@@ -212,7 +211,7 @@ contract yBribe {
     /// @dev Should not rely on this function for any user case where precision is required.
     function claimable(address user, address gauge, address reward_token) external view returns (uint) {
         uint _period = current_period();
-        if(user == BLOCKED_USER || next_claim_time[user] > _period) {
+        if(user == BLOCKED_USER) {
             return 0;
         }
         if (last_user_claim[user][gauge][reward_token] >= _period) {
@@ -250,7 +249,7 @@ contract yBribe {
     
     function _claim_reward(address user, address gauge, address reward_token) internal returns (uint) {
         bool permitted = msg.sender == user || (claim_delegate[user] == address(0) || claim_delegate[user] == msg.sender);
-        if(!permitted || user == BLOCKED_USER || next_claim_time[user] > current_period()){
+        if(!permitted || user == BLOCKED_USER){
             return 0;
         }
         uint _period = _update_period(gauge, reward_token);
