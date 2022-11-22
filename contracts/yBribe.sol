@@ -42,6 +42,7 @@ contract yBribe {
     event ChangeOwner(address owner);
     event PeriodUpdated(address indexed gauge, uint indexed period, uint amount, uint bias, uint omitted_bias);
     event FeeUpdated(uint fee);
+    event SetFeeRecipient(address recipient);
 
     uint constant WEEK = 86400 * 7;
     uint constant PRECISION = 10**18;
@@ -153,8 +154,10 @@ contract yBribe {
         uint total_fee_take = fee_percent * total_amount / PRECISION;
         uint fee_per;
         if (total_fee_take > 0){
-            _safeTransfer(reward_token, fee_recipient, total_fee_take);
             fee_per = total_fee_take / n_periods;
+            // @dev: adjust total to prevent rounding mismatch
+            total_fee_take = fee_per * n_periods;
+            _safeTransfer(reward_token, fee_recipient, total_fee_take);
         }
         amount_per_period -= fee_per;
         uint curr_period = _update_period(gauge, reward_token);
@@ -180,7 +183,9 @@ contract yBribe {
         emit RewardAdded(msg.sender, scheduled_period, gauge, reward_token, reward_amount, fee_take);
     }
 
-    /// @notice Allow briber to reclaim 
+    /// @notice Allow briber to reclaim a bribe posted to a week that never got recognized in a week
+    /// @dev If a bribe was posted using the schedule feature and receieves no claims/adds in the preceding week, the scheduled amount will fail to be included as a bribe. 
+    /// @dev In this circumstance, the briber who scheduled the amount can use this function to recoup the amount. Else, the tokens will remain in the contract without utility.
     function retrieve_for_period(uint scheduled_period, address gauge, address reward_token) external {
         require(scheduled_period < current_period(), "!Past");
         uint amount = user_scheduled_rewards[msg.sender][scheduled_period][gauge][reward_token];
@@ -190,6 +195,16 @@ contract yBribe {
             _safeTransfer(reward_token, msg.sender, amount);
             emit RewardRetrieved(msg.sender, gauge, reward_token, scheduled_period, amount);
         }
+    }
+
+    /// @notice Helper function to help a user query if they're able to retreive a past bribe they posted for any given period.
+    /// @dev If a bribe was posted using the schedule feature and receieves no claims/adds in the preceding week, the scheduled amount will fail to be included as a bribe. 
+    /// @dev In this circumstance, the briber who scheduled the amount can use this helper to see how many tokens they can recover.
+    function can_retrieve_for_period(uint scheduled_period, address gauge, address reward_token) external view returns (uint) {
+        if (scheduled_period >= current_period()) {
+            return 0;
+        }
+        return user_scheduled_rewards[msg.sender][scheduled_period][gauge][reward_token];
     }
 
     /// @notice Estimate pending bribe amount for any user
@@ -323,6 +338,7 @@ contract yBribe {
     function set_fee_recipient(address _recipient) external {
         require(msg.sender == owner, "!owner");
         fee_recipient = _recipient;
+        emit SetFeeRecipient(_recipient);
     }
 
     /// @notice Allow to set a claim delegate, effectively blocking others from claiming rewards
@@ -344,7 +360,7 @@ contract yBribe {
 
     function clear_claim_delegate() external {
         address current_delegate = claim_delegate[msg.sender];
-        require (current_delegate != address(0), "No recipient set");
+        require (current_delegate != address(0), "No delegate set");
         claim_delegate[msg.sender]= address(0);
         emit ClearClaimDelegate(msg.sender, current_delegate);
     }
