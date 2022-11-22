@@ -16,13 +16,11 @@ interface GaugeController {
     function last_user_vote(address, address) external view returns (uint);
     function points_weight(address, uint) external view returns (Point memory);
     function checkpoint_gauge(address) external;
-    function time_total() external view returns (uint);
     function gauge_types(address) external view returns (int128);
 }
 
 interface erc20 { 
     function transfer(address recipient, uint amount) external returns (bool);
-    function decimals() external view returns (uint8);
     function balanceOf(address) external view returns (uint);
     function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
     function approve(address spender, uint amount) external returns (bool);
