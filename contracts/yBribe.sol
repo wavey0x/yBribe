@@ -394,9 +394,14 @@ contract yBribe {
         (bool success, bytes memory data) =
             token.call(abi.encodeWithSelector(erc20.transferFrom.selector, from, to, value));
         require(success && (data.length == 0 || abi.decode(data, (bool))));
+        require(isContract(token));
     }
 
     function _min(uint a, uint b) internal pure returns (uint) {
         return a < b ? a : b;
+    }
+
+    function isContract(address account) internal view returns (bool) {
+        return account.code.length > 0;
     }
 }
