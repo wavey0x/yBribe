@@ -1,7 +1,5 @@
 pragma solidity 0.8.6;
 
-import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-
 interface GaugeController {
     struct VotedSlope {
         uint slope;
@@ -31,31 +29,34 @@ interface erc20 {
 }
 
 contract yBribe {
-    using EnumerableSet for EnumerableSet.AddressSet;
 
-    event RewardAdded(address indexed briber, address indexed gauge, address indexed reward_token, uint amount, uint fee);
+    event RewardAdded(address indexed briber, uint period, address indexed gauge, address indexed reward_token, uint amount, uint fee);
+    event RewardScheduled(address indexed briber, uint period, address indexed gauge, address indexed reward_token, uint amount, uint fee, uint n_periods, uint delay);
     event NewTokenReward(address indexed gauge, address indexed reward_token); // Specifies unique token added for first time to gauge
     event RewardClaimed(address indexed user, address indexed gauge, address indexed reward_token, uint amount);
-    event Blacklisted(address indexed user);
-    event RemovedFromBlacklist(address indexed user);
     event SetRewardRecipient(address indexed user, address recipient);
     event ClearRewardRecipient(address indexed user, address recipient);
+    event SetClaimDelegate(address indexed user, address new_delegate);
+    event ClearClaimDelegate(address indexed user, address cleared_delegate);
     event ChangeOwner(address owner);
-    event PeriodUpdated(address indexed gauge, uint indexed period, uint bias, uint blacklisted_bias);
+    event PeriodUpdated(address indexed gauge, uint indexed period, uint amount, uint bias, uint omitted_bias);
     event FeeUpdated(uint fee);
 
     uint constant WEEK = 86400 * 7;
     uint constant PRECISION = 10**18;
-    uint constant BPS = 10_000;
     GaugeController constant GAUGE = GaugeController(0x2F50D538606Fa9EDD2B11E2446BEb18C9D5846bB);
+    address constant BLOCKED_USER = 0x989AEb4d175e16225E39E87d0D97A3360524AD80;
     
     mapping(address => mapping(address => uint)) public claims_per_gauge;
     mapping(address => mapping(address => uint)) public reward_per_gauge;
-    
     mapping(address => mapping(address => uint)) public reward_per_token;
     mapping(address => mapping(address => uint)) public active_period;
+    // @dev: used to track posted bribes in future periods
+    mapping(uint => mapping(address => mapping(address => uint))) public scheduled_rewards;
     mapping(address => mapping(address => mapping(address => uint))) public last_user_claim;
     mapping(address => uint) public next_claim_time;
+    // @dev: Default 0x0 allows any account to claim for bribee. If set, blocks claims from arbitrary accounts.
+    mapping(address => address) public claim_delegate;
     
     mapping(address => address[]) public _rewards_per_gauge;
     mapping(address => address[]) public _gauges_per_reward;
@@ -64,10 +65,10 @@ contract yBribe {
     address public owner = 0xFEB4acf3df3cDEA7399794D0869ef76A6EfAff52;
     address public fee_recipient = 0x93A62dA5a14C80f265DAbC077fCEE437B1a0Efde;
     address public pending_owner;
-    uint public fee_percent = 100; // Expressed in BPS
+    uint public fee_percent = 1e16; // 1e16 is 1%; 1e18 is 100%
     mapping(address => address) public reward_recipient;
-    EnumerableSet.AddressSet private blacklist;
     
+    /// @dev add reward/gauge pair if it hasn't been already
     function _add(address gauge, address reward) internal {
         if (!_rewards_in_gauge[gauge][reward]) {
             _rewards_per_gauge[gauge].push(reward);
@@ -93,39 +94,94 @@ contract yBribe {
             _period = current_period();
             GAUGE.checkpoint_gauge(gauge);
             uint _bias = GAUGE.points_weight(gauge, _period).bias;
-            uint blacklisted_bias = get_blacklisted_bias(gauge);
-            _bias -= blacklisted_bias;
-            emit PeriodUpdated(gauge, _period, _bias, blacklisted_bias);
-            uint _amount = reward_per_gauge[gauge][reward_token] - claims_per_gauge[gauge][reward_token];
-            if (_bias > 0){
-                reward_per_token[gauge][reward_token] = _amount * PRECISION / _bias;
+            uint omitted_bias = get_omitted_bias(gauge);
+            _bias -= omitted_bias;
+            uint scheduled_amount = scheduled_rewards[_period][gauge][reward_token];
+            if (scheduled_amount != 0) {
+                delete scheduled_rewards[_period][gauge][reward_token]; // @dev: gas refund
             }
+            reward_per_gauge[gauge][reward_token] += scheduled_amount;
+            uint _amount = (
+                reward_per_gauge[gauge][reward_token] -
+                claims_per_gauge[gauge][reward_token]
+            );
+            if (_bias > 0){
+                _amount = _amount * PRECISION / _bias;
+                reward_per_token[gauge][reward_token] = _amount;
+            }
+            emit PeriodUpdated(gauge, _period, _amount, _bias, omitted_bias);
             active_period[gauge][reward_token] = _period;
         }
         return _period;
     }
     
+    /// @notice Add single reward to the upcoming period
+    /// @param gauge gauge to add reward to
+    /// @param reward_token token address of reward to offer
+    /// @param amount amount of tokens to offer as bribe in upcoming period
     function add_reward_amount(address gauge, address reward_token, uint amount) external returns (bool) {
         require(GAUGE.gauge_types(gauge) >= 0); // @dev: reverts on invalid gauge
         _safeTransferFrom(reward_token, msg.sender, address(this), amount);
-        uint fee_take = fee_percent * amount / BPS;
+        uint fee_take = fee_percent * amount / PRECISION;
         uint reward_amount = amount - fee_take;
         if (fee_take > 0){
             _safeTransfer(reward_token, fee_recipient, fee_take);
         }
-        _update_period(gauge, reward_token);
-        reward_per_gauge[gauge][reward_token] += reward_amount;
-        _add(gauge, reward_token);
-        emit RewardAdded(msg.sender, gauge, reward_token, reward_amount, fee_take);
+        uint curr_period = _update_period(gauge, reward_token);
+        _schedule_for_period(curr_period + WEEK, curr_period, gauge, reward_token, reward_amount, fee_take);
         return true;
     }
+
+    /// @notice Schedule rewards for release in a specific range of future periods
+    /// @dev When scheduling, specify index range where index of 0 is the upcoming period.
+    /// @param gauge Gauge to add rewards to
+    /// @param reward_token Token address of reward to offer
+    /// @param amount_per_period Amount of tokens to offer per period
+    /// @param n_periods Number of periods to bribe for. Will be applied to n number of periods beginning with the start period specified by delay.
+    /// @param delay Number of periods after upcoming period from which to start scheduled rewards. 0 starts in upcoming period; 5 starts five weeks after upcoming period.
+    function schedule_reward_amount(address gauge, address reward_token, uint amount_per_period, uint n_periods, uint delay) external returns (bool) {
+        require(GAUGE.gauge_types(gauge) >= 0); // @dev: reverts on invalid gauge
+        require(delay <= 20); // @dev: max 20 weeks
+        require(n_periods <= 20); // @dev: max 20 weeks
+        // Transfer tokens before updating state variables to prevent re-entry
+        uint total_amount = n_periods * amount_per_period;
+        _safeTransferFrom(reward_token, msg.sender, address(this), total_amount);
+        uint total_fee_take = fee_percent * total_amount / PRECISION;
+        uint fee_per;
+        if (total_fee_take > 0){
+            _safeTransfer(reward_token, fee_recipient, total_fee_take);
+            fee_per = total_fee_take / n_periods;
+        }
+        amount_per_period -= fee_per;
+        uint curr_period = _update_period(gauge, reward_token);
+        uint iterator_max = n_periods + delay;
+        for (uint i = delay; i < iterator_max; i++){
+            uint scheduled_period = curr_period + (i * WEEK) + WEEK;
+            _schedule_for_period(scheduled_period, curr_period, gauge, reward_token, amount_per_period, fee_per);
+        }
+        emit RewardScheduled(msg.sender, curr_period, gauge, reward_token, total_amount - total_fee_take, total_fee_take, n_periods, delay);
+        return true;
+    }
+
+    function _schedule_for_period(uint scheduled_period, uint curr_period, address gauge, address reward_token, uint reward_amount, uint fee_take) internal {
+        // @dev: if posted in active period, apply to upcoming period. Otherwise, schedule for future period.
+        if (scheduled_period == curr_period + WEEK) {
+            reward_per_gauge[gauge][reward_token] += reward_amount;
+        }
+        else {
+            scheduled_rewards[scheduled_period][gauge][reward_token] += reward_amount;
+        }
+        _add(gauge, reward_token);
+        emit RewardAdded(msg.sender, scheduled_period, gauge, reward_token, reward_amount, fee_take);
+    }
+
     
     /// @notice Estimate pending bribe amount for any user
     /// @dev This function returns zero if active_period has not yet been updated.
     /// @dev Should not rely on this function for any user case where precision is required.
     function claimable(address user, address gauge, address reward_token) external view returns (uint) {
         uint _period = current_period();
-        if(blacklist.contains(user) || next_claim_time[user] > _period) {
+        if(user == BLOCKED_USER || next_claim_time[user] > _period) {
             return 0;
         }
         if (last_user_claim[user][gauge][reward_token] >= _period) {
@@ -162,7 +218,8 @@ contract yBribe {
     }
     
     function _claim_reward(address user, address gauge, address reward_token) internal returns (uint) {
-        if(blacklist.contains(user) || next_claim_time[user] > current_period()){
+        bool permitted = msg.sender == user || (claim_delegate[user] == address(0) || claim_delegate[user] == msg.sender);
+        if(!permitted || user == BLOCKED_USER || next_claim_time[user] > current_period()){
             return 0;
         }
         uint _period = _update_period(gauge, reward_token);
@@ -178,7 +235,7 @@ contract yBribe {
                     address recipient = reward_recipient[user];
                     recipient = recipient == address(0) ? user : recipient;
                     _safeTransfer(reward_token, recipient, _amount);
-                    emit RewardClaimed(user, gauge, user, _amount);
+                    emit RewardClaimed(user, gauge, reward_token, _amount);
                 }
             }
         }
@@ -194,46 +251,10 @@ contract yBribe {
         return _slope * (_end - current);
     }
 
-    /// @dev Sum all blacklisted bias for any gauge in current period.
-    function get_blacklisted_bias(address gauge) public view returns (uint) {
-        uint bias;
-        uint length = blacklist.length();
-        for (uint i = 0; i < length; i++) {
-            address user = blacklist.at(i);
-            GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
-            bias += _calc_bias(vs.slope, vs.end);
-        }
-        return bias;
-    }
-
-    /// @notice Allow owner to add address to blacklist, preventing them from claiming
-    /// @dev Any vote weight address added
-    function add_to_blacklist(address _user) external {
-        require(msg.sender == owner, "!owner");
-        if(blacklist.add(_user)) emit Blacklisted(_user);
-    }
-
-    /// @notice Allow owner to remove address from blacklist
-    /// @dev We set a next_claim_time to prevent access to current period's bribes
-    function remove_from_blacklist(address _user) external {
-        require(msg.sender == owner, "!owner");
-        if(blacklist.remove(_user)){
-            next_claim_time[_user] = current_period() + WEEK;
-            emit RemovedFromBlacklist(_user);
-        }
-    }
-
-    /// @notice Check if address is blacklisted
-    function is_blacklisted(address address_to_check) public view returns (bool) {
-        return blacklist.contains(address_to_check);
-    }
-
-    /// @dev Helper function, if possible, avoid using on-chain as list can grow unbounded
-    function get_blacklist() public view returns (address[] memory _blacklist) {
-        _blacklist = new address[](blacklist.length());
-        for (uint i; i < blacklist.length(); i++) {
-            _blacklist[i] = blacklist.at(i);
-        }
+    /// @dev Find total bias to omit on particular gauge.
+    function get_omitted_bias(address gauge) public view returns (uint) {
+        GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(BLOCKED_USER, gauge);
+        return _calc_bias(vs.slope, vs.end);
     }
 
     /// @dev Helper function to determine current period globally. Not specific to any gauges or internal state.
@@ -262,7 +283,6 @@ contract yBribe {
     function clear_recipient() external {
         address current_recipient = reward_recipient[msg.sender];
         require (current_recipient != address(0), "No recipient set");
-        // update delegation mapping
         reward_recipient[msg.sender]= address(0);
         emit ClearRewardRecipient(msg.sender, current_recipient);
     }
@@ -270,13 +290,38 @@ contract yBribe {
     /// @notice Allow owner to set fees of up to 4% of bribes upon deposit
     function set_fee_percent(uint _percent) external {
         require(msg.sender == owner, "!owner");
-        require(_percent <= 400);
+        require(_percent <= 4e16); // @dev: max 4%
         fee_percent = _percent;
+        emit FeeUpdated(_percent);
     }
 
     function set_fee_recipient(address _recipient) external {
         require(msg.sender == owner, "!owner");
         fee_recipient = _recipient;
+    }
+
+    /// @notice Allow to set a claim delegate, effectively blocking others from claiming rewards
+    function set_claim_delegate(address _delegate) external {
+        require (_delegate != msg.sender, "self");
+        require (_delegate != address(0), "Clear First");
+        address current_delegate = claim_delegate[msg.sender];
+        require (_delegate != current_delegate, "Already set");
+        
+        // Update delegation mapping
+        claim_delegate[msg.sender] = _delegate;
+        
+        if (current_delegate != address(0)) {
+            emit ClearClaimDelegate(msg.sender, current_delegate);
+        }
+
+        emit SetClaimDelegate(msg.sender, _delegate);
+    }
+
+    function clear_claim_delegate() external {
+        address current_delegate = claim_delegate[msg.sender];
+        require (current_delegate != address(0), "No recipient set");
+        claim_delegate[msg.sender]= address(0);
+        emit ClearClaimDelegate(msg.sender, current_delegate);
     }
 
     function set_owner(address _new_owner) external {
