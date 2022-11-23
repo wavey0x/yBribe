@@ -126,7 +126,7 @@ def gauge2():  # DOLA
 
 @pytest.fixture
 def token1_whale(accounts):
-    return accounts.at("0x090185f2135308BaD17527004364eBcC2D37e5F6", force=True)
+    return accounts.at("0x5A7C5505f3CFB9a0D9A8493EC41bf27EE48c406D", force=True)
 
 
 @pytest.fixture

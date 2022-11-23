@@ -52,6 +52,7 @@ def test_standard_operation(
         == offer["weeklyBribeAmount"] * 4
         == offer1["weeklyBribeAmount"] * 4
     )
+    assert (token1.balanceOf(otc) ==10_000 * 1e18 * 4)
 
     assert current_votes > require_vecrv
     with brownie.reverts():

@@ -116,7 +116,7 @@ contract OtcBriber {
         uint96 _requiredVeCrvAmount,
         uint8 _numberOfWeeks,
         uint40 _weeksInTheFuture // 1 is next week. 0 is last week. 
-    ) external returns (uint96) {
+    ) external noReentry returns (uint96) {
         return
             _setupBribe(
                 _voter,
@@ -137,7 +137,7 @@ contract OtcBriber {
         uint168 _weeklyBribeAmount,
         uint96 _requiredVeCrvAmount,
         uint8 _numberOfWeeks
-    ) external returns (uint96) {
+    ) external noReentry returns (uint96) {
         return
             _setupBribe(
                 _voter,
@@ -165,10 +165,13 @@ contract OtcBriber {
         require(_start < block.timestamp + WEEK * 52); // @dev: start date over a year in the future
         require(GAUGE.gauge_types(_gauge) >= 0); // @dev: reverts on invalid gauge
         require(_numberOfWeeks <= 39, "cant vote for more than 39");
+        require(_numberOfWeeks > 0, "0 weeks");
+        require(_weeklyBribeAmount > 0, "0 bribe amount");
+        require(_requiredVeCrvAmount > 0, "no votes required");
 
         _safeTransferFrom(
-            msg.sender,
             _bribeToken,
+            msg.sender,
             address(this),
             uint256(_weeklyBribeAmount) * uint256(_numberOfWeeks)
         );
@@ -215,7 +218,7 @@ contract OtcBriber {
         }
     }
 
-    function claimBribe(uint256 id, uint256 week) external {
+    function claimBribe(uint256 id, uint256 week) external noReentry {
 
         BribeOffer memory _offer = bribeOffers[id];
         require(_offer.briber != address(0), "bribe doesnt exist");
@@ -258,7 +261,7 @@ contract OtcBriber {
         );
     }
 
-    function retrieveUnclaimedBribesPerWeek(uint256 id, uint256 week) external {
+    function retrieveUnclaimedBribesPerWeek(uint256 id, uint256 week) external noReentry {
 
         BribeOffer memory _offer = bribeOffers[id];
         require(_offer.briber != address(0), "bribe doesnt exist");
@@ -267,6 +270,8 @@ contract OtcBriber {
         require(week <= _offer.numberOfWeeks, "too many weeks");
 
         uint256 claimingPeriod = _offer.start + ((week - 1) * WEEK);
+
+        require(claimingPeriod < block.timestamp, "votes not finalised");
 
         require(
             !_hasClaimed(_offer.claimed, week),
@@ -417,7 +422,7 @@ contract OtcBriber {
             return 0;
         }
 
-        uint _bias = _votedAmount(_offer.gauge, _offer.voter, lastVote);
+        uint _bias = _votedAmount(_offer.gauge, _offer.voter, claimingPeriod);
 
         if (_bias < _offer.requiredVeCrvAmount) {
             return 0;
@@ -426,7 +431,7 @@ contract OtcBriber {
         }
     }
 
-    function reduceBribeRequirement(uint _id, uint96 _newRequirement) external{
+    function reduceBribeRequirement(uint _id, uint96 _newRequirement) external noReentry{
         BribeOffer memory _offer = bribeOffers[_id];
 
         require(_offer.briber != address(0), "bribe doesnt exist");
@@ -500,6 +505,7 @@ contract OtcBriber {
         address to,
         uint value
     ) internal {
+        require(token.code.length > 0);
         (bool success, bytes memory data) = token.call(
             abi.encodeWithSelector(erc20.transferFrom.selector, from, to, value)
         );
