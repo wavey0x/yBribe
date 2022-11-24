@@ -59,6 +59,7 @@ contract OtcBriber {
     }
 
     event SetRewardRecipient(address indexed user, address recipient);
+    event BribeRequirementReduced(uint id, uint newRequiredVeCrvAmount);
     event ClearRewardRecipient(address indexed user, address recipient);
     event NewBribeOffer(
         address indexed voter,
@@ -114,8 +115,8 @@ contract OtcBriber {
         uint168 _weeklyBribeAmount,
         uint96 _requiredVeCrvAmount,
         uint8 _numberOfWeeks,
-        uint40 _start
-    ) external returns (uint96) {
+        uint40 _weeksInTheFuture // 1 is next week. 0 is last week. 
+    ) external noReentry returns (uint96) {
         return
             _setupBribe(
                 _voter,
@@ -124,10 +125,11 @@ contract OtcBriber {
                 _weeklyBribeAmount,
                 _requiredVeCrvAmount,
                 _numberOfWeeks,
-                _start
+                uint40(currentPeriod() + (WEEK * _weeksInTheFuture))
             );
     }
 
+    //same as setupBribe with _weeksInTheFuture as 1
     function setupBribe(
         address _voter,
         address _gauge,
@@ -135,7 +137,7 @@ contract OtcBriber {
         uint168 _weeklyBribeAmount,
         uint96 _requiredVeCrvAmount,
         uint8 _numberOfWeeks
-    ) external returns (uint96) {
+    ) external noReentry returns (uint96) {
         return
             _setupBribe(
                 _voter,
@@ -144,7 +146,7 @@ contract OtcBriber {
                 _weeklyBribeAmount,
                 _requiredVeCrvAmount,
                 _numberOfWeeks,
-                uint40(current_period() + WEEK)
+                uint40(currentPeriod() + WEEK)
             );
     }
 
@@ -163,10 +165,13 @@ contract OtcBriber {
         require(_start < block.timestamp + WEEK * 52); // @dev: start date over a year in the future
         require(GAUGE.gauge_types(_gauge) >= 0); // @dev: reverts on invalid gauge
         require(_numberOfWeeks <= 39, "cant vote for more than 39");
+        require(_numberOfWeeks > 0, "0 weeks");
+        require(_weeklyBribeAmount > 0, "0 bribe amount");
+        require(_requiredVeCrvAmount > 0, "no votes required");
 
         _safeTransferFrom(
-            msg.sender,
             _bribeToken,
+            msg.sender,
             address(this),
             uint256(_weeklyBribeAmount) * uint256(_numberOfWeeks)
         );
@@ -197,7 +202,7 @@ contract OtcBriber {
         );
     }
 
-    function set_recipient(address _recipient) external {
+    function setRecipient(address _recipient) external {
         require(_recipient != msg.sender, "self");
         address currentRecipient = rewardRecipient[msg.sender];
         require(_recipient != currentRecipient, "Already set");
@@ -213,12 +218,12 @@ contract OtcBriber {
         }
     }
 
-    function claimBribe(uint256 id, uint256 week) external {
-        require(bribeExists(id), "bribe doesnt exist");
+    function claimBribe(uint256 id, uint256 week) external noReentry {
 
         BribeOffer memory _offer = bribeOffers[id];
+        require(_offer.briber != address(0), "bribe doesnt exist");
 
-        uint _bias = _claimable(_offer, week);
+        uint _bias = _getEffectiveBias(_offer, week);
 
         require(_bias != 0, "not claimable");
 
@@ -234,11 +239,11 @@ contract OtcBriber {
                 _offer.weeklyBribeAmount
             );
         } else {
-            uint fee = (_offer.weeklyBribeAmount * fee) / BPS;
-            uint remaining = _offer.weeklyBribeAmount - fee;
+            uint feeAmount = (_offer.weeklyBribeAmount * fee) / BPS;
+            uint remaining = _offer.weeklyBribeAmount - feeAmount;
 
             _safeTransfer(_offer.bribeToken, recipient, remaining);
-            _safeTransfer(_offer.bribeToken, feeRecipient, fee);
+            _safeTransfer(_offer.bribeToken, feeRecipient, feeAmount);
         }
 
         uint256 claimingPeriod = _offer.start + ((week - 1) * WEEK);
@@ -256,22 +261,24 @@ contract OtcBriber {
         );
     }
 
-    function retrieveUnclaimedBribesPerWeek(uint256 id, uint256 week) external {
-        require(bribeExists(id), "bribe doesnt exist");
+    function retrieveUnclaimedBribesPerWeek(uint256 id, uint256 week) external noReentry {
 
         BribeOffer memory _offer = bribeOffers[id];
+        require(_offer.briber != address(0), "bribe doesnt exist");
         require(msg.sender == _offer.briber, "not your bribe");
 
         require(week <= _offer.numberOfWeeks, "too many weeks");
 
         uint256 claimingPeriod = _offer.start + ((week - 1) * WEEK);
 
+        require(claimingPeriod < block.timestamp, "votes not finalised");
+
         require(
             !_hasClaimed(_offer.claimed, week),
             "already claimed for this week"
         ); //bitwise and
 
-        bool canRetrieve = false;
+        bool canRetrieve;
         uint lastVote = GAUGE.last_user_vote(_offer.voter, _offer.gauge);
         if (lastVote > claimingPeriod) {
             canRetrieve = true;
@@ -319,7 +326,7 @@ contract OtcBriber {
     function retrievable(uint id) public view returns (bool) {
         BribeOffer memory _offer = bribeOffers[id];
 
-        if (!bribeExists(id)) {
+        if (_offer.briber == address(0)) {
             return false;
         }
 
@@ -337,14 +344,15 @@ contract OtcBriber {
         require(msg.sender == owner, "!owner");
         require(_percent <= 400);
         fee = _percent;
+        emit FeeUpdated(_percent);
     }
 
-    function set_owner(address _newOwner) external {
+    function setOwner(address _newOwner) external {
         require(msg.sender == owner, "!owner");
         pendingOwner = _newOwner;
     }
 
-    function accept_owner() external {
+    function acceptOwner() external {
         address _pendingOwner = pendingOwner;
         require(msg.sender == _pendingOwner, "!pendingOwner");
         owner = _pendingOwner;
@@ -384,10 +392,10 @@ contract OtcBriber {
     function claimable(uint id, uint week) external view returns (bool) {
         BribeOffer memory _offer = bribeOffers[id];
 
-        return _claimable(_offer, week) > 0;
+        return _getEffectiveBias(_offer, week) > 0;
     }
 
-    function _claimable(
+    function _getEffectiveBias(
         BribeOffer memory _offer,
         uint week
     ) internal view returns (uint) {
@@ -414,13 +422,26 @@ contract OtcBriber {
             return 0;
         }
 
-        uint _bias = _votedAmount(_offer.gauge, _offer.voter, lastVote);
+        uint _bias = _votedAmount(_offer.gauge, _offer.voter, claimingPeriod);
 
         if (_bias < _offer.requiredVeCrvAmount) {
             return 0;
         } else {
             return _bias;
         }
+    }
+
+    function reduceBribeRequirement(uint _id, uint96 _newRequirement) external noReentry{
+        BribeOffer memory _offer = bribeOffers[_id];
+
+        require(_offer.briber != address(0), "bribe doesnt exist");
+        require(msg.sender == _offer.briber, "not your bribe");
+        require(_newRequirement < _offer.requiredVeCrvAmount, 'not a decrease');
+        
+        bribeOffers[_id].requiredVeCrvAmount = _newRequirement;
+
+        emit BribeRequirementReduced(_id, _newRequirement);
+
     }
 
     function votedAmount(
@@ -441,7 +462,7 @@ contract OtcBriber {
             _voter,
             _gauge
         );
-        return _calc_bias(vs.slope, vs.end, _lastVote);
+        return _calcBias(vs.slope, vs.end, _lastVote);
     }
 
     function _updateClaimed(
@@ -458,7 +479,7 @@ contract OtcBriber {
         }
     }
 
-    function _calc_bias(
+    function _calcBias(
         uint _slope,
         uint _end,
         uint256 current
@@ -467,7 +488,7 @@ contract OtcBriber {
         return _slope * (_end - current);
     }
 
-    function current_period() public view returns (uint) {
+    function currentPeriod() public view returns (uint) {
         return (block.timestamp / WEEK) * WEEK;
     }
 
@@ -484,11 +505,13 @@ contract OtcBriber {
         address to,
         uint value
     ) internal {
+        require(token.code.length > 0);
         (bool success, bytes memory data) = token.call(
             abi.encodeWithSelector(erc20.transferFrom.selector, from, to, value)
         );
         require(success && (data.length == 0 || abi.decode(data, (bool))));
     }
+
 
     function bribeExists(uint id) public view returns (bool) {
         return bribeOffers[id].briber != address(0);

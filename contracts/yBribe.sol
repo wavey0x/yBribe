@@ -178,7 +178,7 @@ contract yBribe {
         emit RewardAdded(msg.sender, scheduled_period, gauge, reward_token, reward_amount, fee_take);
     }
 
-    /// @notice Allow briber to reclaim a bribe posted to a week that never got recognized in a week
+    /// @notice Allow briber to reclaim a bribe posted to a week that never got recognized due to no period update
     /// @dev If a bribe was posted using the schedule feature and receieves no claims/adds in the preceding week, the scheduled amount will fail to be included as a bribe. 
     /// @dev In this circumstance, the briber who scheduled the amount can use this function to recoup the amount. Else, the tokens will remain in the contract without utility.
     function retrieve_for_period(uint scheduled_period, address gauge, address reward_token) external {
@@ -192,9 +192,8 @@ contract yBribe {
         }
     }
 
-    /// @notice Helper function to help a user query if they're able to retreive a past bribe they posted for any given period.
-    /// @dev If a bribe was posted using the schedule feature and receieves no claims/adds in the preceding week, the scheduled amount will fail to be included as a bribe. 
-    /// @dev In this circumstance, the briber who scheduled the amount can use this helper to see how many tokens they can recover.
+    /// @notice Helper function allowing user query if they're able to retreive a past bribe they've posted for any given period.
+    /// @dev See further details in retrieve_for_period comments above.
     function can_retrieve_for_period(uint scheduled_period, address gauge, address reward_token) external view returns (uint) {
         if (scheduled_period >= current_period()) {
             return 0;
