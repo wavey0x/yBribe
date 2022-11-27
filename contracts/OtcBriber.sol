@@ -6,42 +6,21 @@ interface GaugeController {
         uint power;
         uint end;
     }
-
-    struct Point {
-        uint bias;
-        uint slope;
-    }
-
     function vote_user_slopes(
         address,
         address
     ) external view returns (VotedSlope memory);
-
     function last_user_vote(address, address) external view returns (uint);
-
-    function points_weight(address, uint) external view returns (Point memory);
-
-    function checkpoint_gauge(address) external;
-
-    function time_total() external view returns (uint);
-
     function gauge_types(address) external view returns (int128);
 }
 
 interface erc20 {
     function transfer(address recipient, uint amount) external returns (bool);
-
-    function decimals() external view returns (uint8);
-
-    function balanceOf(address) external view returns (uint);
-
     function transferFrom(
         address sender,
         address recipient,
         uint256 amount
     ) external returns (bool);
-
-    function approve(address spender, uint amount) external returns (bool);
 }
 
 contract OtcBriber {
@@ -95,6 +74,7 @@ contract OtcBriber {
     );
     event FeeUpdated(uint fee);
     event ChangeOwner(address owner);
+    event SetFeeRecipient(address recipient);
 
     mapping(uint256 => BribeOffer) public bribeOffers;
     mapping(address => address) public rewardRecipient;
@@ -223,7 +203,7 @@ contract OtcBriber {
         BribeOffer memory _offer = bribeOffers[id];
         require(_offer.briber != address(0), "bribe doesnt exist");
 
-        uint _bias = _getEffectiveBias(_offer, week);
+        uint _bias = _getEffectiveBias(_offer, week, id);
 
         require(_bias != 0, "not claimable");
 
@@ -311,6 +291,7 @@ contract OtcBriber {
     }
 
     function hasClaimed(uint id, uint week) external view returns (bool) {
+        if (week == 0) return false;
         return _hasClaimed(bribeOffers[id].claimed, week);
     }
 
@@ -338,6 +319,7 @@ contract OtcBriber {
     function setFeeRecipient(address _recipient) external {
         require(msg.sender == owner, "!owner");
         feeRecipient = _recipient;
+        emit SetFeeRecipient(_recipient);
     }
 
     function setFee(uint _percent) external {
@@ -390,16 +372,18 @@ contract OtcBriber {
     }
 
     function claimable(uint id, uint week) external view returns (bool) {
+        if (week == 0) return false;
         BribeOffer memory _offer = bribeOffers[id];
 
-        return _getEffectiveBias(_offer, week) > 0;
+        return _getEffectiveBias(_offer, week, id) > 0;
     }
 
     function _getEffectiveBias(
         BribeOffer memory _offer,
-        uint week
+        uint week,
+        uint id
     ) internal view returns (uint) {
-        if (!bribeExists(_offer.bribeId)) {
+        if (!bribeExists(id)) {
             return 0;
         }
 
