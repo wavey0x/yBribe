@@ -264,7 +264,7 @@ contract OtcBriber {
             canRetrieve = true;
         }
 
-        uint _bias = _votedAmount(_offer.gauge, _offer.voter, lastVote);
+        uint _bias = _votedAmount(_offer.gauge, _offer.voter, claimingPeriod);
         if (_bias < _offer.requiredVeCrvAmount) {
             canRetrieve = true;
         }
