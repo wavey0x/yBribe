@@ -55,7 +55,6 @@ def test_reclaim_bribes(
     chain.sleep(WEEK)
     chain.mine(1)
     tx = bribe.retrieve_for_period(bribe.current_period() - WEEK, gauge1, token1, {'from': token1_whale})
-    assert False
 
     balance = token1.balanceOf(bribe)
     fee = evm_div(int(amount) * int(n_periods) * int(bribe.fee_percent()), 10**18)

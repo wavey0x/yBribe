@@ -55,8 +55,7 @@ def test_standard_operation(
     assert (token1.balanceOf(otc) ==10_000 * 1e18 * 4)
 
     assert current_votes > require_vecrv
-    with brownie.reverts():
-        otc.claimable(id, 0)
+    assert otc.claimable(id, 0) == False
     assert otc.claimable(id, 1) == False
 
     chain.sleep(WEEK)
@@ -187,64 +186,3 @@ def test_not_voted_enough(
     assert offer2["briber"] == ZERO_ADDRESS
     assert offer2["voter"] == ZERO_ADDRESS
     assert token1.balanceOf(otc) == 0
-
-def test_future_claim(
-    token1,
-    token2,
-    token1_whale,
-    bribe,
-    user,
-    otc,
-    token2_whale,
-    gauge1,
-    gauge2,
-    gauge_controller,
-    voter1,
-    voter2,
-):
-    WEEK = 86400 * 7
-    require_vecrv = 2_000_000 * 1e18
-
-    token1.approve(otc, 50_000 * 1e18, {"from": token1_whale})
-    whale_bal = token1.balanceOf(token1_whale)
-    fee_receiver = otc.feeRecipient()
-
-    current_votes = otc.votedAmount(gauge1, voter2)
-    print(current_votes / 1e18)
-
-    t1 = otc.setupBribe(
-        voter2, gauge1, token1, 10_000 * 1e18, require_vecrv, 10, {"from": token1_whale}
-    )
-    offer = t1.events["NewBribeOffer"]
-
-    id = offer["id"]
-
-    offer1 = otc.bribeOffers(0).dict()
-
-    assert False
-    print(offer1)
-    assert id == 0
-    assert offer["voter"] == voter2 == offer1["voter"]
-    assert offer["gauge"] == gauge1 == offer1["gauge"]
-    assert offer["briber"] == token1_whale == offer1["briber"]
-    assert offer["requiredVeCrvAmount"] == require_vecrv
-    assert offer["requiredVeCrvAmount"] == offer1["requiredVeCrvAmount"]
-    assert offer["bribeToken"] == token1 == offer1["bribeToken"]
-    assert offer["weeklyBribeAmount"] == 10_000 * 1e18 == offer1["weeklyBribeAmount"]
-    assert offer["start"] == chain.time() // WEEK * WEEK + WEEK == offer1["start"]
-    assert offer["numWeeks"] == 4 == offer1["numberOfWeeks"]
-    assert (
-        token1.balanceOf(otc)
-        == offer["weeklyBribeAmount"] * 4
-        == offer1["weeklyBribeAmount"] * 4
-    )
-    assert (token1.balanceOf(otc) ==10_000 * 1e18 * 4)
-
-    assert current_votes > require_vecrv
-    with brownie.reverts():
-        otc.claimable(id, 0)
-    assert otc.claimable(id, 1) == False
-
-    chain.sleep(WEEK)
-    chain.mine(1)
-    print(chain.time())

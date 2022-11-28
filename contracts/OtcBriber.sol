@@ -30,7 +30,6 @@ contract OtcBriber {
         uint96 requiredVeCrvAmount; // max 7bil
         address gauge; //slot
         address bribeToken; // slot
-        uint96 bribeId;
         uint168 weeklyBribeAmount; // slot
         uint40 start; // max 34000 years in the future
         uint8 numberOfWeeks;
@@ -162,7 +161,6 @@ contract OtcBriber {
             _requiredVeCrvAmount,
             _gauge,
             _bribeToken,
-            id,
             _weeklyBribeAmount,
             _start,
             _numberOfWeeks,
