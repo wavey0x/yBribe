@@ -44,24 +44,32 @@ def test_reclaim_bribes(
     before2 = bribe.claimable(voter1, gauge1, token1)
 
     amount = 5_000e18
-    n_periods = 5
+    n_periods = 10
     delay = 0
     tx = bribe.schedule_reward_amount(gauge1, token1, amount, n_periods, delay, {'from': token1_whale})
     len(tx.events['RewardAdded']) == n_periods
-
     chain.sleep(WEEK)
     chain.mine(1)
-    bribe.claimable(voter2, gauge1, token1)
-    chain.sleep(WEEK)
-    chain.mine(1)
-    tx = bribe.retrieve_for_period(bribe.current_period() - WEEK, gauge1, token1, {'from': token1_whale})
 
-    balance = token1.balanceOf(bribe)
-    fee = evm_div(int(amount) * int(n_periods) * int(bribe.fee_percent()), 10**18)
-    assert balance == int(int(amount) * int(n_periods)) - int(fee)
+    for i in range(1,10):
+        chain.sleep(WEEK)
+        chain.mine(1)
+        if i % 2 == 0:
+            print(f'-- No reclaim on {bribe.current_period()}')
+            tx = bribe.add_reward_amount(gauge1, token1, 0, {'from': token1_whale})
+        else:
+            print(f'-- Re-claim possible on {bribe.current_period()} --')
 
-    fee = amount * n_periods * bribe.fee_percent() / 1e18
-    assert balance == int(amount) * int(n_periods) - int(fee)
+    print()
+
+    for i in range(1,10):
+        period_to_check = bribe.current_period() - (i * WEEK)
+        print(f'-- {period_to_check} --')
+        print(bribe.amount_retrievable_for_period(token1_whale, period_to_check, gauge1, token1))
+        if i % 2 == 0:
+            assert bribe.amount_retrievable_for_period(token1_whale, period_to_check, gauge1, token1) > 0
+        else:
+            assert bribe.amount_retrievable_for_period(token1_whale, period_to_check, gauge1, token1) == 0
 
 # EVM div semantics as a python function
 def evm_div(x, y):

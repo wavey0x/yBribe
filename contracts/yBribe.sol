@@ -194,11 +194,10 @@ contract yBribe {
 
     /// @notice Helper function allowing user query if they're able to retreive a past bribe they've posted for any given period.
     /// @dev See further details in retrieve_for_period comments above.
-    function can_retrieve_for_period(uint scheduled_period, address gauge, address reward_token) external view returns (uint) {
-        if (scheduled_period >= current_period()) {
-            return 0;
-        }
-        return user_scheduled_rewards[msg.sender][scheduled_period][gauge][reward_token];
+    function amount_retrievable_for_period(address user, uint scheduled_period, address gauge, address reward_token) external view returns (uint) {
+        if (scheduled_period >= current_period()) return 0;
+        if (scheduled_rewards[scheduled_period][gauge][reward_token] == 0) return 0;
+        return user_scheduled_rewards[user][scheduled_period][gauge][reward_token];
     }
 
     /// @notice Estimate pending bribe amount for any user
