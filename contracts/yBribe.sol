@@ -16,22 +16,19 @@ interface GaugeController {
     function last_user_vote(address, address) external view returns (uint);
     function points_weight(address, uint) external view returns (Point memory);
     function checkpoint_gauge(address) external;
-    function time_total() external view returns (uint);
     function gauge_types(address) external view returns (int128);
 }
 
 interface erc20 { 
     function transfer(address recipient, uint amount) external returns (bool);
-    function decimals() external view returns (uint8);
-    function balanceOf(address) external view returns (uint);
     function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
-    function approve(address spender, uint amount) external returns (bool);
 }
 
 contract yBribe {
 
     event RewardAdded(address indexed briber, uint period, address indexed gauge, address indexed reward_token, uint amount, uint fee);
     event RewardScheduled(address indexed briber, uint period, address indexed gauge, address indexed reward_token, uint amount, uint fee, uint n_periods, uint delay);
+    event RewardRetrieved(address indexed briber, address indexed gauge, address indexed reward_token, uint scheduled_period, uint amount);
     event NewTokenReward(address indexed gauge, address indexed reward_token); // Specifies unique token added for first time to gauge
     event RewardClaimed(address indexed user, address indexed gauge, address indexed reward_token, uint amount);
     event SetRewardRecipient(address indexed user, address recipient);
@@ -41,6 +38,7 @@ contract yBribe {
     event ChangeOwner(address owner);
     event PeriodUpdated(address indexed gauge, uint indexed period, uint amount, uint bias, uint omitted_bias);
     event FeeUpdated(uint fee);
+    event SetFeeRecipient(address recipient);
 
     uint constant WEEK = 86400 * 7;
     uint constant PRECISION = 10**18;
@@ -53,8 +51,8 @@ contract yBribe {
     mapping(address => mapping(address => uint)) public active_period;
     // @dev: used to track posted bribes in future periods
     mapping(uint => mapping(address => mapping(address => uint))) public scheduled_rewards;
+    mapping(address => mapping(uint => mapping(address => mapping(address => uint)))) public user_scheduled_rewards;
     mapping(address => mapping(address => mapping(address => uint))) public last_user_claim;
-    mapping(address => uint) public next_claim_time;
     // @dev: Default 0x0 allows any account to claim for bribee. If set, blocks claims from arbitrary accounts.
     mapping(address => address) public claim_delegate;
     
@@ -94,17 +92,19 @@ contract yBribe {
             _period = current_period();
             GAUGE.checkpoint_gauge(gauge);
             uint _bias = GAUGE.points_weight(gauge, _period).bias;
-            uint omitted_bias = get_omitted_bias(gauge);
-            _bias -= omitted_bias;
+            uint last_user_vote = GAUGE.last_user_vote(BLOCKED_USER, gauge);
+            uint omitted_bias;
+            // @dev: Skip bias omission in edge-case where blocked user votes active period prior to _update_period called
+            if(last_user_vote < _period) {
+                omitted_bias = get_omitted_bias(gauge);
+                _bias -= omitted_bias;
+            }
             uint scheduled_amount = scheduled_rewards[_period][gauge][reward_token];
             if (scheduled_amount != 0) {
                 delete scheduled_rewards[_period][gauge][reward_token]; // @dev: gas refund
             }
             reward_per_gauge[gauge][reward_token] += scheduled_amount;
-            uint _amount = (
-                reward_per_gauge[gauge][reward_token] -
-                claims_per_gauge[gauge][reward_token]
-            );
+            uint _amount = _max_claim(gauge, reward_token);
             if (_bias > 0){
                 _amount = _amount * PRECISION / _bias;
                 reward_per_token[gauge][reward_token] = _amount;
@@ -149,8 +149,10 @@ contract yBribe {
         uint total_fee_take = fee_percent * total_amount / PRECISION;
         uint fee_per;
         if (total_fee_take > 0){
-            _safeTransfer(reward_token, fee_recipient, total_fee_take);
             fee_per = total_fee_take / n_periods;
+            // @dev: adjust total to prevent rounding mismatch
+            total_fee_take = fee_per * n_periods;
+            _safeTransfer(reward_token, fee_recipient, total_fee_take);
         }
         amount_per_period -= fee_per;
         uint curr_period = _update_period(gauge, reward_token);
@@ -170,18 +172,40 @@ contract yBribe {
         }
         else {
             scheduled_rewards[scheduled_period][gauge][reward_token] += reward_amount;
+            user_scheduled_rewards[msg.sender][scheduled_period][gauge][reward_token] += reward_amount;
         }
         _add(gauge, reward_token);
         emit RewardAdded(msg.sender, scheduled_period, gauge, reward_token, reward_amount, fee_take);
     }
 
-    
+    /// @notice Allow briber to reclaim a bribe posted to a week that never got recognized due to no period update
+    /// @dev If a bribe was posted using the schedule feature and receieves no claims/adds in the preceding week, the scheduled amount will fail to be included as a bribe. 
+    /// @dev In this circumstance, the briber who scheduled the amount can use this function to recoup the amount. Else, the tokens will remain in the contract without utility.
+    function retrieve_for_period(uint scheduled_period, address gauge, address reward_token) external {
+        require(scheduled_period < current_period(), "!Past");
+        uint amount = user_scheduled_rewards[msg.sender][scheduled_period][gauge][reward_token];
+        if(amount > 0) {
+            scheduled_rewards[scheduled_period][gauge][reward_token] -= amount;
+            delete user_scheduled_rewards[msg.sender][scheduled_period][gauge][reward_token];
+            _safeTransfer(reward_token, msg.sender, amount);
+            emit RewardRetrieved(msg.sender, gauge, reward_token, scheduled_period, amount);
+        }
+    }
+
+    /// @notice Helper function allowing user query if they're able to retreive a past bribe they've posted for any given period.
+    /// @dev See further details in retrieve_for_period comments above.
+    function amount_retrievable_for_period(address user, uint scheduled_period, address gauge, address reward_token) external view returns (uint) {
+        if (scheduled_period >= current_period()) return 0;
+        if (scheduled_rewards[scheduled_period][gauge][reward_token] == 0) return 0;
+        return user_scheduled_rewards[user][scheduled_period][gauge][reward_token];
+    }
+
     /// @notice Estimate pending bribe amount for any user
     /// @dev This function returns zero if active_period has not yet been updated.
     /// @dev Should not rely on this function for any user case where precision is required.
     function claimable(address user, address gauge, address reward_token) external view returns (uint) {
         uint _period = current_period();
-        if(user == BLOCKED_USER || next_claim_time[user] > _period) {
+        if(user == BLOCKED_USER) {
             return 0;
         }
         if (last_user_claim[user][gauge][reward_token] >= _period) {
@@ -219,7 +243,7 @@ contract yBribe {
     
     function _claim_reward(address user, address gauge, address reward_token) internal returns (uint) {
         bool permitted = msg.sender == user || (claim_delegate[user] == address(0) || claim_delegate[user] == msg.sender);
-        if(!permitted || user == BLOCKED_USER || next_claim_time[user] > current_period()){
+        if(!permitted || user == BLOCKED_USER){
             return 0;
         }
         uint _period = _update_period(gauge, reward_token);
@@ -230,6 +254,7 @@ contract yBribe {
                 GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(user, gauge);
                 uint _user_bias = _calc_bias(vs.slope, vs.end);
                 _amount = _user_bias * reward_per_token[gauge][reward_token] / PRECISION;
+                _amount = _min(_amount, _max_claim(gauge, reward_token));
                 if (_amount > 0) {
                     claims_per_gauge[gauge][reward_token] += _amount;
                     address recipient = reward_recipient[user];
@@ -255,6 +280,14 @@ contract yBribe {
     function get_omitted_bias(address gauge) public view returns (uint) {
         GaugeController.VotedSlope memory vs = GAUGE.vote_user_slopes(BLOCKED_USER, gauge);
         return _calc_bias(vs.slope, vs.end);
+    }
+
+    /// @dev Returns maximum claim amount for any gauge in current period
+    function _max_claim(address gauge, address reward_token) internal view returns (uint) {
+        return (
+            reward_per_gauge[gauge][reward_token] -
+            claims_per_gauge[gauge][reward_token]
+        );
     }
 
     /// @dev Helper function to determine current period globally. Not specific to any gauges or internal state.
@@ -298,6 +331,7 @@ contract yBribe {
     function set_fee_recipient(address _recipient) external {
         require(msg.sender == owner, "!owner");
         fee_recipient = _recipient;
+        emit SetFeeRecipient(_recipient);
     }
 
     /// @notice Allow to set a claim delegate, effectively blocking others from claiming rewards
@@ -319,7 +353,7 @@ contract yBribe {
 
     function clear_claim_delegate() external {
         address current_delegate = claim_delegate[msg.sender];
-        require (current_delegate != address(0), "No recipient set");
+        require (current_delegate != address(0), "No delegate set");
         claim_delegate[msg.sender]= address(0);
         emit ClearClaimDelegate(msg.sender, current_delegate);
     }
@@ -356,5 +390,14 @@ contract yBribe {
         (bool success, bytes memory data) =
             token.call(abi.encodeWithSelector(erc20.transferFrom.selector, from, to, value));
         require(success && (data.length == 0 || abi.decode(data, (bool))));
+        require(isContract(token));
+    }
+
+    function _min(uint a, uint b) internal pure returns (uint) {
+        return a < b ? a : b;
+    }
+
+    function isContract(address account) internal view returns (bool) {
+        return account.code.length > 0;
     }
 }

@@ -100,6 +100,11 @@ def gauge1(): # MIM
     return Contract("0xd8b712d29381748dB89c36BCa0138d7c75866ddF")
 
 @pytest.fixture
+def otc(user, OtcBriber):
+    otc = user.deploy(OtcBriber)
+    return otc
+    
+@pytest.fixture
 def gauge2(): # DOLA
     return Contract("0x8Fa728F393588E8D8dD1ca397E9a710E53fA553a")
 
